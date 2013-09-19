@@ -1853,6 +1853,8 @@ static void omapfb_free_resources(struct omapfb2_device *fbdev)
 		if (dssdev->state != OMAP_DSS_DISPLAY_DISABLED)
 			dssdev->driver->disable(dssdev);
 
+		dssdev->driver->disconnect(dssdev);
+
 		omap_dss_put_device(dssdev);
 	}
 
@@ -2363,27 +2365,26 @@ static int omapfb_init_connections(struct omapfb2_device *fbdev,
 	int i, r;
 	struct omap_overlay_manager *mgr;
 
-	if (!def_dssdev->output) {
-		dev_err(fbdev->dev, "no output for the default display\n");
-		return -EINVAL;
+	r = def_dssdev->driver->connect(def_dssdev);
+	if (r) {
+		dev_err(fbdev->dev, "failed to connect default display\n");
+		return r;
 	}
 
 	for (i = 0; i < fbdev->num_displays; ++i) {
 		struct omap_dss_device *dssdev = fbdev->displays[i].dssdev;
-		struct omap_dss_output *out = dssdev->output;
 
-		mgr = omap_dss_get_overlay_manager(dssdev->channel);
-
-		if (!mgr || !out)
+		if (dssdev == def_dssdev)
 			continue;
 
-		if (mgr->output)
-			mgr->unset_output(mgr);
-
-		mgr->set_output(mgr, out);
+		/*
+		 * We don't care if the connect succeeds or not. We just want to
+		 * connect as many displays as possible.
+		 */
+		dssdev->driver->connect(dssdev);
 	}
 
-	mgr = def_dssdev->output->manager;
+	mgr = omapdss_find_mgr_from_display(def_dssdev);
 
 	if (!mgr) {
 		dev_err(fbdev->dev, "no ovl manager for the default display\n");
@@ -2406,7 +2407,7 @@ static int omapfb_init_connections(struct omapfb2_device *fbdev,
 	return 0;
 }
 
-static int __init omapfb_probe(struct platform_device *pdev)
+static int omapfb_probe(struct platform_device *pdev)
 {
 	struct omapfb2_device *fbdev = NULL;
 	int r = 0;
@@ -2415,6 +2416,9 @@ static int __init omapfb_probe(struct platform_device *pdev)
 	struct omap_dss_device *dssdev;
 
 	DBG("omapfb_probe\n");
+
+	if (omapdss_is_initialized() == false)
+		return -EPROBE_DEFER;
 
 	if (pdev->num_resources != 0) {
 		dev_err(&pdev->dev, "probed for an unknown device\n");
@@ -2468,7 +2472,7 @@ static int __init omapfb_probe(struct platform_device *pdev)
 
 	if (fbdev->num_displays == 0) {
 		dev_err(&pdev->dev, "no displays\n");
-		r = -EINVAL;
+		r = -EPROBE_DEFER;
 		goto cleanup;
 	}
 
@@ -2499,7 +2503,7 @@ static int __init omapfb_probe(struct platform_device *pdev)
 
 	if (def_display == NULL) {
 		dev_err(fbdev->dev, "failed to find default display\n");
-		r = -EINVAL;
+		r = -EPROBE_DEFER;
 		goto cleanup;
 	}
 
@@ -2579,6 +2583,7 @@ static int __exit omapfb_remove(struct platform_device *pdev)
 }
 
 static struct platform_driver omapfb_driver = {
+	.probe		= omapfb_probe,
 	.remove         = __exit_p(omapfb_remove),
 	.driver         = {
 		.name   = "omapfb",
@@ -2586,36 +2591,13 @@ static struct platform_driver omapfb_driver = {
 	},
 };
 
-static int __init omapfb_init(void)
-{
-	DBG("omapfb_init\n");
-
-	if (platform_driver_probe(&omapfb_driver, omapfb_probe)) {
-		printk(KERN_ERR "failed to register omapfb driver\n");
-		return -ENODEV;
-	}
-
-	return 0;
-}
-
-static void __exit omapfb_exit(void)
-{
-	DBG("omapfb_exit\n");
-	platform_driver_unregister(&omapfb_driver);
-}
-
 module_param_named(mode, def_mode, charp, 0);
 module_param_named(vram, def_vram, charp, 0);
 module_param_named(rotate, def_rotate, int, 0);
 module_param_named(vrfb, def_vrfb, bool, 0);
 module_param_named(mirror, def_mirror, bool, 0);
 
-/* late_initcall to let panel/ctrl drivers loaded first.
- * I guess better option would be a more dynamic approach,
- * so that omapfb reacts to new panels when they are loaded */
-late_initcall(omapfb_init);
-/*module_init(omapfb_init);*/
-module_exit(omapfb_exit);
+module_platform_driver(omapfb_driver);
 
 MODULE_AUTHOR("Tomi Valkeinen <tomi.valkeinen@nokia.com>");
 MODULE_DESCRIPTION("OMAP2/3 Framebuffer");

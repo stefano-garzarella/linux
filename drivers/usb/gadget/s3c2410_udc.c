@@ -1809,7 +1809,7 @@ static int s3c2410_udc_probe(struct platform_device *pdev)
 	}
 
 	spin_lock_init(&udc->lock);
-	udc_info = pdev->dev.platform_data;
+	udc_info = dev_get_platdata(&pdev->dev);
 
 	rsrc_start = S3C2410_PA_USBDEV;
 	rsrc_len   = S3C24XX_SZ_USBDEV;
@@ -1851,6 +1851,7 @@ static int s3c2410_udc_probe(struct platform_device *pdev)
 		irq = gpio_to_irq(udc_info->vbus_pin);
 		if (irq < 0) {
 			dev_err(dev, "no irq for gpio vbus pin\n");
+			retval = irq;
 			goto err_gpio_claim;
 		}
 
@@ -1947,8 +1948,6 @@ static int s3c2410_udc_remove(struct platform_device *pdev)
 
 	iounmap(base_addr);
 	release_mem_region(rsrc_start, rsrc_len);
-
-	platform_set_drvdata(pdev, NULL);
 
 	if (!IS_ERR(udc_clock) && udc_clock != NULL) {
 		clk_disable(udc_clock);

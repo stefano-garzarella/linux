@@ -52,7 +52,6 @@ struct pci_controller {
 /*
  * Used by boards to register their PCI busses before the actual scanning.
  */
-extern struct pci_controller * alloc_pci_controller(void);
 extern void register_pci_controller(struct pci_controller *hose);
 
 /*
@@ -136,11 +135,6 @@ static inline int pci_get_legacy_ide_irq(struct pci_dev *dev, int channel)
 {
 	return channel ? 15 : 14;
 }
-
-#ifdef CONFIG_CPU_CAVIUM_OCTEON
-/* MSI arch hook for OCTEON */
-#define arch_setup_msi_irqs arch_setup_msi_irqs
-#endif
 
 extern char * (*pcibios_plat_setup)(char *str);
 

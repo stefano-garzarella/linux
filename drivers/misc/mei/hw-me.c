@@ -103,7 +103,7 @@ static inline void mei_hcsr_set(struct mei_me_hw *hw, u32 hcsr)
 
 
 /**
- * me_hw_config - configure hw dependent settings
+ * mei_me_hw_config - configure hw dependent settings
  *
  * @dev: mei device
  */
@@ -169,28 +169,26 @@ static void mei_me_hw_reset_release(struct mei_device *dev)
  * mei_me_hw_reset - resets fw via mei csr register.
  *
  * @dev: the device structure
- * @interrupts_enabled: if interrupt should be enabled after reset.
+ * @intr_enable: if interrupt should be enabled after reset.
  */
-static void mei_me_hw_reset(struct mei_device *dev, bool intr_enable)
+static int mei_me_hw_reset(struct mei_device *dev, bool intr_enable)
 {
 	struct mei_me_hw *hw = to_me_hw(dev);
 	u32 hcsr = mei_hcsr_read(hw);
 
-	dev_dbg(&dev->pdev->dev, "before reset HCSR = 0x%08x.\n", hcsr);
-
-	hcsr |= (H_RST | H_IG);
+	hcsr |= H_RST | H_IG | H_IS;
 
 	if (intr_enable)
 		hcsr |= H_IE;
 	else
-		hcsr |= ~H_IE;
+		hcsr &= ~H_IE;
 
-	mei_hcsr_set(hw, hcsr);
+	mei_me_reg_write(hw, H_CSR, hcsr);
 
 	if (dev->dev_state == MEI_DEV_POWER_DOWN)
 		mei_me_hw_reset_release(dev);
 
-	dev_dbg(&dev->pdev->dev, "current HCSR = 0x%08x.\n", mei_hcsr_read(hw));
+	return 0;
 }
 
 /**
@@ -238,14 +236,18 @@ static int mei_me_hw_ready_wait(struct mei_device *dev)
 	if (mei_me_hw_is_ready(dev))
 		return 0;
 
+	dev->recvd_hw_ready = false;
 	mutex_unlock(&dev->device_lock);
 	err = wait_event_interruptible_timeout(dev->wait_hw_ready,
-			dev->recvd_hw_ready, MEI_INTEROP_TIMEOUT);
+			dev->recvd_hw_ready,
+			mei_secs_to_jiffies(MEI_INTEROP_TIMEOUT));
 	mutex_lock(&dev->device_lock);
 	if (!err && !dev->recvd_hw_ready) {
+		if (!err)
+			err = -ETIMEDOUT;
 		dev_err(&dev->pdev->dev,
-			"wait hw ready failed. status = 0x%x\n", err);
-		return -ETIMEDOUT;
+			"wait hw ready failed. status = %d\n", err);
+		return err;
 	}
 
 	dev->recvd_hw_ready = false;
@@ -285,7 +287,7 @@ static unsigned char mei_hbuf_filled_slots(struct mei_device *dev)
 }
 
 /**
- * mei_hbuf_is_empty - checks if host buffer is empty.
+ * mei_me_hbuf_is_empty - checks if host buffer is empty.
  *
  * @dev: the device structure
  *
@@ -482,7 +484,9 @@ irqreturn_t mei_me_irq_thread_handler(int irq, void *dev_id)
 	/* check if ME wants a reset */
 	if (!mei_hw_is_ready(dev) &&
 	    dev->dev_state != MEI_DEV_RESETTING &&
-	    dev->dev_state != MEI_DEV_INITIALIZING) {
+	    dev->dev_state != MEI_DEV_INITIALIZING &&
+	    dev->dev_state != MEI_DEV_POWER_DOWN &&
+	    dev->dev_state != MEI_DEV_POWER_UP) {
 		dev_dbg(&dev->pdev->dev, "FW not ready.\n");
 		mei_reset(dev, 1);
 		mutex_unlock(&dev->device_lock);
@@ -554,7 +558,7 @@ static const struct mei_hw_ops mei_me_hw_ops = {
 };
 
 /**
- * init_mei_device - allocates and initializes the mei device structure
+ * mei_me_dev_init - allocates and initializes the mei device structure
  *
  * @pdev: The pci device structure
  *

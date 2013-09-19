@@ -16,9 +16,11 @@
 #include <drm/drm_crtc.h>
 #include <drm/drm_fb_helper.h>
 #include <drm/drm_crtc_helper.h>
+#include <drm/exynos_drm.h>
 
 #include "exynos_drm_drv.h"
 #include "exynos_drm_fb.h"
+#include "exynos_drm_fbdev.h"
 #include "exynos_drm_gem.h"
 #include "exynos_drm_iommu.h"
 
@@ -42,8 +44,6 @@ static int exynos_drm_fb_mmap(struct fb_info *info,
 	struct exynos_drm_gem_buf *buffer = exynos_gem_obj->buffer;
 	unsigned long vm_size;
 	int ret;
-
-	DRM_DEBUG_KMS("%s\n", __func__);
 
 	vma->vm_flags |= VM_IO | VM_DONTEXPAND | VM_DONTDUMP;
 
@@ -83,8 +83,6 @@ static int exynos_drm_fbdev_update(struct drm_fb_helper *helper,
 	struct exynos_drm_gem_buf *buffer;
 	unsigned int size = fb->width * fb->height * (fb->bits_per_pixel >> 3);
 	unsigned long offset;
-
-	DRM_DEBUG_KMS("%s\n", __FILE__);
 
 	drm_fb_helper_fill_fix(fbi, fb->pitches[0], fb->depth);
 	drm_fb_helper_fill_var(fbi, helper, fb->width, fb->height);
@@ -148,8 +146,6 @@ static int exynos_drm_fbdev_create(struct drm_fb_helper *helper,
 	unsigned long size;
 	int ret;
 
-	DRM_DEBUG_KMS("%s\n", __FILE__);
-
 	DRM_DEBUG_KMS("surface width(%d), height(%d) and bpp(%d\n",
 			sizes->surface_width, sizes->surface_height,
 			sizes->surface_bpp);
@@ -171,8 +167,18 @@ static int exynos_drm_fbdev_create(struct drm_fb_helper *helper,
 
 	size = mode_cmd.pitches[0] * mode_cmd.height;
 
-	/* 0 means to allocate physically continuous memory */
-	exynos_gem_obj = exynos_drm_gem_create(dev, 0, size);
+	exynos_gem_obj = exynos_drm_gem_create(dev, EXYNOS_BO_CONTIG, size);
+	/*
+	 * If physically contiguous memory allocation fails and if IOMMU is
+	 * supported then try to get buffer from non physically contiguous
+	 * memory area.
+	 */
+	if (IS_ERR(exynos_gem_obj) && is_drm_iommu_supported(dev)) {
+		dev_warn(&pdev->dev, "contiguous FB allocation failed, falling back to non-contiguous\n");
+		exynos_gem_obj = exynos_drm_gem_create(dev, EXYNOS_BO_NONCONTIG,
+							size);
+	}
+
 	if (IS_ERR(exynos_gem_obj)) {
 		ret = PTR_ERR(exynos_gem_obj);
 		goto err_release_framebuffer;
@@ -182,7 +188,7 @@ static int exynos_drm_fbdev_create(struct drm_fb_helper *helper,
 
 	helper->fb = exynos_drm_framebuffer_init(dev, &mode_cmd,
 			&exynos_gem_obj->base);
-	if (IS_ERR_OR_NULL(helper->fb)) {
+	if (IS_ERR(helper->fb)) {
 		DRM_ERROR("failed to create drm framebuffer.\n");
 		ret = PTR_ERR(helper->fb);
 		goto err_destroy_gem;
@@ -238,16 +244,12 @@ int exynos_drm_fbdev_init(struct drm_device *dev)
 	unsigned int num_crtc;
 	int ret;
 
-	DRM_DEBUG_KMS("%s\n", __FILE__);
-
 	if (!dev->mode_config.num_crtc || !dev->mode_config.num_connector)
 		return 0;
 
 	fbdev = kzalloc(sizeof(*fbdev), GFP_KERNEL);
-	if (!fbdev) {
-		DRM_ERROR("failed to allocate drm fbdev.\n");
+	if (!fbdev)
 		return -ENOMEM;
-	}
 
 	private->fb_helper = helper = &fbdev->drm_fb_helper;
 	helper->funcs = &exynos_drm_fb_helper_funcs;

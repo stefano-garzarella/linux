@@ -360,12 +360,12 @@ static void cs_deactivate(struct atmel_spi *as, struct spi_device *spi)
 		gpio_set_value(asd->npcs_pin, !active);
 }
 
-static void atmel_spi_lock(struct atmel_spi *as)
+static void atmel_spi_lock(struct atmel_spi *as) __acquires(&as->lock)
 {
 	spin_lock_irqsave(&as->lock, as->flags);
 }
 
-static void atmel_spi_unlock(struct atmel_spi *as)
+static void atmel_spi_unlock(struct atmel_spi *as) __releases(&as->lock)
 {
 	spin_unlock_irqrestore(&as->lock, as->flags);
 }
@@ -424,10 +424,15 @@ static int atmel_spi_dma_slave_config(struct atmel_spi *as,
 	return err;
 }
 
-static bool filter(struct dma_chan *chan, void *slave)
+static bool filter(struct dma_chan *chan, void *pdata)
 {
-	struct	at_dma_slave *sl = slave;
+	struct atmel_spi_dma *sl_pdata = pdata;
+	struct at_dma_slave *sl;
 
+	if (!sl_pdata)
+		return false;
+
+	sl = &sl_pdata->dma_slave;
 	if (sl->dma_dev == chan->device->dev) {
 		chan->private = sl;
 		return true;
@@ -438,24 +443,31 @@ static bool filter(struct dma_chan *chan, void *slave)
 
 static int atmel_spi_configure_dma(struct atmel_spi *as)
 {
-	struct at_dma_slave *sdata = &as->dma.dma_slave;
 	struct dma_slave_config	slave_config;
+	struct device *dev = &as->pdev->dev;
 	int err;
 
-	if (sdata && sdata->dma_dev) {
-		dma_cap_mask_t mask;
+	dma_cap_mask_t mask;
+	dma_cap_zero(mask);
+	dma_cap_set(DMA_SLAVE, mask);
 
-		/* Try to grab two DMA channels */
-		dma_cap_zero(mask);
-		dma_cap_set(DMA_SLAVE, mask);
-		as->dma.chan_tx = dma_request_channel(mask, filter, sdata);
-		if (as->dma.chan_tx)
-			as->dma.chan_rx =
-				dma_request_channel(mask, filter, sdata);
+	as->dma.chan_tx = dma_request_slave_channel_compat(mask, filter,
+							   &as->dma,
+							   dev, "tx");
+	if (!as->dma.chan_tx) {
+		dev_err(dev,
+			"DMA TX channel not available, SPI unable to use DMA\n");
+		err = -EBUSY;
+		goto error;
 	}
-	if (!as->dma.chan_rx || !as->dma.chan_tx) {
-		dev_err(&as->pdev->dev,
-			"DMA channel not available, SPI unable to use DMA\n");
+
+	as->dma.chan_rx = dma_request_slave_channel_compat(mask, filter,
+							   &as->dma,
+							   dev, "rx");
+
+	if (!as->dma.chan_rx) {
+		dev_err(dev,
+			"DMA RX channel not available, SPI unable to use DMA\n");
 		err = -EBUSY;
 		goto error;
 	}
@@ -526,13 +538,17 @@ static void atmel_spi_next_xfer_pio(struct spi_master *master,
 	}
 
 	if (xfer->tx_buf)
-		spi_writel(as, TDR, *(u8 *)(xfer->tx_buf));
+		if (xfer->bits_per_word > 8)
+			spi_writel(as, TDR, *(u16 *)(xfer->tx_buf));
+		else
+			spi_writel(as, TDR, *(u8 *)(xfer->tx_buf));
 	else
 		spi_writel(as, TDR, 0);
 
 	dev_dbg(master->dev.parent,
-		"  start pio xfer %p: len %u tx %p rx %p\n",
-		xfer, xfer->len, xfer->tx_buf, xfer->rx_buf);
+		"  start pio xfer %p: len %u tx %p rx %p bitpw %d\n",
+		xfer, xfer->len, xfer->tx_buf, xfer->rx_buf,
+		xfer->bits_per_word);
 
 	/* Enable relevant interrupts */
 	spi_writel(as, IER, SPI_BIT(RDRF) | SPI_BIT(OVRES));
@@ -613,9 +629,9 @@ static int atmel_spi_next_xfer_dma_submit(struct spi_master *master,
 		goto err_dma;
 
 	dev_dbg(master->dev.parent,
-		"  start dma xfer %p: len %u tx %p/%08x rx %p/%08x\n",
-		xfer, xfer->len, xfer->tx_buf, xfer->tx_dma,
-		xfer->rx_buf, xfer->rx_dma);
+		"  start dma xfer %p: len %u tx %p/%08llx rx %p/%08llx\n",
+		xfer, xfer->len, xfer->tx_buf, (unsigned long long)xfer->tx_dma,
+		xfer->rx_buf, (unsigned long long)xfer->rx_dma);
 
 	/* Enable relevant interrupts */
 	spi_writel(as, IER, SPI_BIT(OVRES));
@@ -716,9 +732,10 @@ static void atmel_spi_pdc_next_xfer(struct spi_master *master,
 		spi_writel(as, TCR, len);
 
 		dev_dbg(&msg->spi->dev,
-			"  start xfer %p: len %u tx %p/%08x rx %p/%08x\n",
-			xfer, xfer->len, xfer->tx_buf, xfer->tx_dma,
-			xfer->rx_buf, xfer->rx_dma);
+			"  start xfer %p: len %u tx %p/%08llx rx %p/%08llx\n",
+			xfer, xfer->len, xfer->tx_buf,
+			(unsigned long long)xfer->tx_dma, xfer->rx_buf,
+			(unsigned long long)xfer->rx_dma);
 	} else {
 		xfer = as->next_transfer;
 		remaining = as->next_remaining_bytes;
@@ -755,9 +772,10 @@ static void atmel_spi_pdc_next_xfer(struct spi_master *master,
 		spi_writel(as, TNCR, len);
 
 		dev_dbg(&msg->spi->dev,
-			"  next xfer %p: len %u tx %p/%08x rx %p/%08x\n",
-			xfer, xfer->len, xfer->tx_buf, xfer->tx_dma,
-			xfer->rx_buf, xfer->rx_dma);
+			"  next xfer %p: len %u tx %p/%08llx rx %p/%08llx\n",
+			xfer, xfer->len, xfer->tx_buf,
+			(unsigned long long)xfer->tx_dma, xfer->rx_buf,
+			(unsigned long long)xfer->rx_dma);
 		ieval = SPI_BIT(ENDRX) | SPI_BIT(OVRES);
 	} else {
 		spi_writel(as, RNCR, 0);
@@ -950,21 +968,39 @@ atmel_spi_pump_pio_data(struct atmel_spi *as, struct spi_transfer *xfer)
 {
 	u8		*txp;
 	u8		*rxp;
+	u16		*txp16;
+	u16		*rxp16;
 	unsigned long	xfer_pos = xfer->len - as->current_remaining_bytes;
 
 	if (xfer->rx_buf) {
-		rxp = ((u8 *)xfer->rx_buf) + xfer_pos;
-		*rxp = spi_readl(as, RDR);
+		if (xfer->bits_per_word > 8) {
+			rxp16 = (u16 *)(((u8 *)xfer->rx_buf) + xfer_pos);
+			*rxp16 = spi_readl(as, RDR);
+		} else {
+			rxp = ((u8 *)xfer->rx_buf) + xfer_pos;
+			*rxp = spi_readl(as, RDR);
+		}
 	} else {
 		spi_readl(as, RDR);
 	}
-
-	as->current_remaining_bytes--;
+	if (xfer->bits_per_word > 8) {
+		as->current_remaining_bytes -= 2;
+		if (as->current_remaining_bytes < 0)
+			as->current_remaining_bytes = 0;
+	} else {
+		as->current_remaining_bytes--;
+	}
 
 	if (as->current_remaining_bytes) {
 		if (xfer->tx_buf) {
-			txp = ((u8 *)xfer->tx_buf) + xfer_pos + 1;
-			spi_writel(as, TDR, *txp);
+			if (xfer->bits_per_word > 8) {
+				txp16 = (u16 *)(((u8 *)xfer->tx_buf)
+							+ xfer_pos + 2);
+				spi_writel(as, TDR, *txp16);
+			} else {
+				txp = ((u8 *)xfer->tx_buf) + xfer_pos + 1;
+				spi_writel(as, TDR, *txp);
+			}
 		} else {
 			spi_writel(as, TDR, 0);
 		}
@@ -1246,13 +1282,6 @@ static int atmel_spi_setup(struct spi_device *spi)
 		return -EINVAL;
 	}
 
-	if (bits < 8 || bits > 16) {
-		dev_dbg(&spi->dev,
-				"setup: invalid bits_per_word %u (8 to 16)\n",
-				bits);
-		return -EINVAL;
-	}
-
 	/* see notes above re chipselect */
 	if (!atmel_spi_is_v2(as)
 			&& spi->chip_select == 0
@@ -1378,9 +1407,16 @@ static int atmel_spi_transfer(struct spi_device *spi, struct spi_message *msg)
 			}
 		}
 
+		if (xfer->bits_per_word > 8) {
+			if (xfer->len % 2) {
+				dev_dbg(&spi->dev, "buffer len should be 16 bits aligned\n");
+				return -EINVAL;
+			}
+		}
+
 		/* FIXME implement these protocol options!! */
-		if (xfer->speed_hz) {
-			dev_dbg(&spi->dev, "no protocol options yet\n");
+		if (xfer->speed_hz < spi->max_speed_hz) {
+			dev_dbg(&spi->dev, "can't change speed in transfer\n");
 			return -ENOPROTOOPT;
 		}
 
@@ -1486,7 +1522,7 @@ static int atmel_spi_probe(struct platform_device *pdev)
 
 	/* the spi->mode bits understood by this driver: */
 	master->mode_bits = SPI_CPOL | SPI_CPHA | SPI_CS_HIGH;
-
+	master->bits_per_word_mask = SPI_BPW_RANGE_MASK(8, 16);
 	master->dev.of_node = pdev->dev.of_node;
 	master->bus_num = pdev->id;
 	master->num_chipselect = master->dev.of_node ? 0 : 4;
@@ -1545,7 +1581,9 @@ static int atmel_spi_probe(struct platform_device *pdev)
 		goto out_unmap_regs;
 
 	/* Initialize the hardware */
-	clk_enable(clk);
+	ret = clk_prepare_enable(clk);
+	if (ret)
+		goto out_unmap_regs;
 	spi_writel(as, CR, SPI_BIT(SWRST));
 	spi_writel(as, CR, SPI_BIT(SWRST)); /* AT91SAM9263 Rev B workaround */
 	if (as->caps.has_wdrbt) {
@@ -1575,7 +1613,7 @@ out_free_dma:
 
 	spi_writel(as, CR, SPI_BIT(SWRST));
 	spi_writel(as, CR, SPI_BIT(SWRST)); /* AT91SAM9263 Rev B workaround */
-	clk_disable(clk);
+	clk_disable_unprepare(clk);
 	free_irq(irq, master);
 out_unmap_regs:
 	iounmap(as->regs);
@@ -1627,7 +1665,7 @@ static int atmel_spi_remove(struct platform_device *pdev)
 	dma_free_coherent(&pdev->dev, BUFFER_SIZE, as->buffer,
 			as->buffer_dma);
 
-	clk_disable(as->clk);
+	clk_disable_unprepare(as->clk);
 	clk_put(as->clk);
 	free_irq(as->irq, master);
 	iounmap(as->regs);
@@ -1644,7 +1682,7 @@ static int atmel_spi_suspend(struct platform_device *pdev, pm_message_t mesg)
 	struct spi_master	*master = platform_get_drvdata(pdev);
 	struct atmel_spi	*as = spi_master_get_devdata(master);
 
-	clk_disable(as->clk);
+	clk_disable_unprepare(as->clk);
 	return 0;
 }
 
@@ -1653,7 +1691,7 @@ static int atmel_spi_resume(struct platform_device *pdev)
 	struct spi_master	*master = platform_get_drvdata(pdev);
 	struct atmel_spi	*as = spi_master_get_devdata(master);
 
-	clk_enable(as->clk);
+	return clk_prepare_enable(as->clk);
 	return 0;
 }
 

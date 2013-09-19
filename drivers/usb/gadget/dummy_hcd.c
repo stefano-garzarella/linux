@@ -868,7 +868,7 @@ static const struct usb_gadget_ops dummy_ops = {
 /*-------------------------------------------------------------------------*/
 
 /* "function" sysfs attribute */
-static ssize_t show_function(struct device *dev, struct device_attribute *attr,
+static ssize_t function_show(struct device *dev, struct device_attribute *attr,
 		char *buf)
 {
 	struct dummy	*dum = gadget_dev_to_dummy(dev);
@@ -877,7 +877,7 @@ static ssize_t show_function(struct device *dev, struct device_attribute *attr,
 		return 0;
 	return scnprintf(buf, PAGE_SIZE, "%s\n", dum->driver->function);
 }
-static DEVICE_ATTR(function, S_IRUGO, show_function, NULL);
+static DEVICE_ATTR_RO(function);
 
 /*-------------------------------------------------------------------------*/
 
@@ -1001,7 +1001,6 @@ static int dummy_udc_remove(struct platform_device *pdev)
 	struct dummy	*dum = platform_get_drvdata(pdev);
 
 	usb_del_gadget_udc(&dum->gadget);
-	platform_set_drvdata(pdev, NULL);
 	device_remove_file(&dum->gadget.dev, &dev_attr_function);
 	return 0;
 }
@@ -2291,7 +2290,7 @@ static inline ssize_t show_urb(char *buf, size_t size, struct urb *urb)
 		urb->actual_length, urb->transfer_buffer_length);
 }
 
-static ssize_t show_urbs(struct device *dev, struct device_attribute *attr,
+static ssize_t urbs_show(struct device *dev, struct device_attribute *attr,
 		char *buf)
 {
 	struct usb_hcd		*hcd = dev_get_drvdata(dev);
@@ -2312,7 +2311,7 @@ static ssize_t show_urbs(struct device *dev, struct device_attribute *attr,
 
 	return size;
 }
-static DEVICE_ATTR(urbs, S_IRUGO, show_urbs, NULL);
+static DEVICE_ATTR_RO(urbs);
 
 static int dummy_start_ss(struct dummy_hcd *dum_hcd)
 {
@@ -2661,8 +2660,10 @@ static int __init init(void)
 	}
 	for (i = 0; i < mod_data.num; i++) {
 		dum[i] = kzalloc(sizeof(struct dummy), GFP_KERNEL);
-		if (!dum[i])
+		if (!dum[i]) {
+			retval = -ENOMEM;
 			goto err_add_pdata;
+		}
 		retval = platform_device_add_data(the_hcd_pdev[i], &dum[i],
 				sizeof(void *));
 		if (retval)

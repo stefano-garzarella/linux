@@ -253,6 +253,37 @@ int usb_serial_generic_chars_in_buffer(struct tty_struct *tty)
 }
 EXPORT_SYMBOL_GPL(usb_serial_generic_chars_in_buffer);
 
+void usb_serial_generic_wait_until_sent(struct tty_struct *tty, long timeout)
+{
+	struct usb_serial_port *port = tty->driver_data;
+	unsigned int bps;
+	unsigned long period;
+	unsigned long expire;
+
+	bps = tty_get_baud_rate(tty);
+	if (!bps)
+		bps = 9600;	/* B0 */
+	/*
+	 * Use a poll-period of roughly the time it takes to send one
+	 * character or at least one jiffy.
+	 */
+	period = max_t(unsigned long, (10 * HZ / bps), 1);
+	period = min_t(unsigned long, period, timeout);
+
+	dev_dbg(&port->dev, "%s - timeout = %u ms, period = %u ms\n",
+					__func__, jiffies_to_msecs(timeout),
+					jiffies_to_msecs(period));
+	expire = jiffies + timeout;
+	while (!port->serial->type->tx_empty(port)) {
+		schedule_timeout_interruptible(period);
+		if (signal_pending(current))
+			break;
+		if (time_after(jiffies, expire))
+			break;
+	}
+}
+EXPORT_SYMBOL_GPL(usb_serial_generic_wait_until_sent);
+
 static int usb_serial_generic_submit_read_urb(struct usb_serial_port *port,
 						int index, gfp_t mem_flags)
 {
@@ -429,12 +460,7 @@ static bool usb_serial_generic_msr_changed(struct tty_struct *tty,
 	/*
 	 * Use tty-port initialised flag to detect all hangups including the
 	 * one generated at USB-device disconnect.
-	 *
-	 * FIXME: Remove hupping check once tty_port_hangup calls shutdown
-	 *        (which clears the initialised flag) before wake up.
 	 */
-	if (test_bit(TTY_HUPPING, &tty->flags))
-		return true;
 	if (!test_bit(ASYNCB_INITIALIZED, &port->port.flags))
 		return true;
 
@@ -465,12 +491,8 @@ int usb_serial_generic_tiocmiwait(struct tty_struct *tty, unsigned long arg)
 
 	ret = wait_event_interruptible(port->port.delta_msr_wait,
 			usb_serial_generic_msr_changed(tty, arg, &cnow));
-	if (!ret) {
-		if (test_bit(TTY_HUPPING, &tty->flags))
-			ret = -EIO;
-		if (!test_bit(ASYNCB_INITIALIZED, &port->port.flags))
-			ret = -EIO;
-	}
+	if (!ret && !test_bit(ASYNCB_INITIALIZED, &port->port.flags))
+		ret = -EIO;
 
 	return ret;
 }

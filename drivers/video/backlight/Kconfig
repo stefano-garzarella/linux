@@ -36,14 +36,14 @@ config LCD_CORGI
 
 config LCD_L4F00242T03
 	tristate "Epson L4F00242T03 LCD"
-	depends on SPI_MASTER && GENERIC_GPIO
+	depends on SPI_MASTER && GPIOLIB
 	help
 	  SPI driver for Epson L4F00242T03. This provides basic support
 	  for init and powering the LCD up/down through a sysfs interface.
 
 config LCD_LMS283GF05
 	tristate "Samsung LMS283GF05 LCD"
-	depends on SPI_MASTER && GENERIC_GPIO
+	depends on SPI_MASTER && GPIOLIB
 	help
 	  SPI driver for Samsung LMS283GF05. This provides basic support
 	  for powering the LCD up/down through a sysfs interface.
@@ -424,6 +424,25 @@ config BACKLIGHT_AS3711
 	help
 	  If you have an Austrian Microsystems AS3711 say Y to enable the
 	  backlight driver.
+
+config BACKLIGHT_GPIO
+	tristate "Generic GPIO based Backlight Driver"
+	depends on GPIOLIB
+	help
+	  If you have a LCD backlight adjustable by GPIO, say Y to enable
+	  this driver.
+
+config BACKLIGHT_LV5207LP
+	tristate "Sanyo LV5207LP Backlight"
+	depends on I2C
+	help
+	  If you have a Sanyo LV5207LP say Y to enable the backlight driver.
+
+config BACKLIGHT_BD6107
+	tristate "Rohm BD6107 Backlight"
+	depends on I2C
+	help
+	  If you have a Rohm BD6107 say Y to enable the backlight driver.
 
 endif # BACKLIGHT_CLASS_DEVICE
 

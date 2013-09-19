@@ -62,6 +62,7 @@ static void mei_hbm_me_cl_allocate(struct mei_device *dev)
 
 /**
  * mei_hbm_cl_hdr - construct client hbm header
+ *
  * @cl: - client
  * @hbm_cmd: host bus message command
  * @buf: buffer for cl header
@@ -138,7 +139,7 @@ int mei_hbm_start_wait(struct mei_device *dev)
 
 	if (ret <= 0 && (dev->hbm_state <= MEI_HBM_START)) {
 		dev->hbm_state = MEI_HBM_IDLE;
-		dev_err(&dev->pdev->dev, "wating for mei start failed\n");
+		dev_err(&dev->pdev->dev, "waiting for mei start failed\n");
 		return -ETIMEDOUT;
 	}
 	return 0;
@@ -166,7 +167,7 @@ int mei_hbm_start_req(struct mei_device *dev)
 
 	dev->hbm_state = MEI_HBM_IDLE;
 	if (mei_write_message(dev, mei_hdr, dev->wr_msg.data)) {
-		dev_err(&dev->pdev->dev, "version message writet failed\n");
+		dev_err(&dev->pdev->dev, "version message write failed\n");
 		dev->dev_state = MEI_DEV_RESETTING;
 		mei_reset(dev, 1);
 		return -ENODEV;
@@ -206,7 +207,7 @@ static void mei_hbm_enum_clients_req(struct mei_device *dev)
 }
 
 /**
- * mei_hbm_prop_requsest - request property for a single client
+ * mei_hbm_prop_req - request property for a single client
  *
  * @dev: the device structure
  *
@@ -306,9 +307,9 @@ int mei_hbm_cl_flow_control_req(struct mei_device *dev, struct mei_cl *cl)
 }
 
 /**
- * add_single_flow_creds - adds single buffer credentials.
+ * mei_hbm_add_single_flow_creds - adds single buffer credentials.
  *
- * @file: private data ot the file object.
+ * @dev: the device structure
  * @flow: flow control.
  */
 static void mei_hbm_add_single_flow_creds(struct mei_device *dev,
@@ -500,7 +501,7 @@ static void mei_hbm_cl_connect_res(struct mei_device *dev,
 
 
 /**
- * mei_client_disconnect_request - disconnect request initiated by me
+ * mei_hbm_fw_disconnect_req - disconnect request initiated by me
  *  host sends disoconnect response
  *
  * @dev: the device structure.
@@ -535,6 +536,20 @@ static void mei_hbm_fw_disconnect_req(struct mei_device *dev,
 
 
 /**
+ * mei_hbm_version_is_supported - checks whether the driver can
+ *     support the hbm version of the device
+ *
+ * @dev: the device structure
+ * returns true if driver can support hbm version of the device
+ */
+bool mei_hbm_version_is_supported(struct mei_device *dev)
+{
+	return	(dev->version.major_version < HBM_MAJOR_VERSION) ||
+		(dev->version.major_version == HBM_MAJOR_VERSION &&
+		 dev->version.minor_version <= HBM_MINOR_VERSION);
+}
+
+/**
  * mei_hbm_dispatch - bottom half read routine after ISR to
  * handle the read bus message cmd processing.
  *
@@ -561,9 +576,24 @@ void mei_hbm_dispatch(struct mei_device *dev, struct mei_msg_hdr *hdr)
 	switch (mei_msg->hbm_cmd) {
 	case HOST_START_RES_CMD:
 		version_res = (struct hbm_host_version_response *)mei_msg;
-		if (!version_res->host_version_supported) {
-			dev->version = version_res->me_max_version;
-			dev_dbg(&dev->pdev->dev, "version mismatch.\n");
+
+		dev_dbg(&dev->pdev->dev, "HBM VERSION: DRIVER=%02d:%02d DEVICE=%02d:%02d\n",
+				HBM_MAJOR_VERSION, HBM_MINOR_VERSION,
+				version_res->me_max_version.major_version,
+				version_res->me_max_version.minor_version);
+
+		if (version_res->host_version_supported) {
+			dev->version.major_version = HBM_MAJOR_VERSION;
+			dev->version.minor_version = HBM_MINOR_VERSION;
+		} else {
+			dev->version.major_version =
+				version_res->me_max_version.major_version;
+			dev->version.minor_version =
+				version_res->me_max_version.minor_version;
+		}
+
+		if (!mei_hbm_version_is_supported(dev)) {
+			dev_warn(&dev->pdev->dev, "hbm version mismatch: stopping the driver.\n");
 
 			dev->hbm_state = MEI_HBM_STOP;
 			mei_hbm_stop_req_prepare(dev, &dev->wr_msg.hdr,
@@ -574,8 +604,6 @@ void mei_hbm_dispatch(struct mei_device *dev, struct mei_msg_hdr *hdr)
 			return;
 		}
 
-		dev->version.major_version = HBM_MAJOR_VERSION;
-		dev->version.minor_version = HBM_MINOR_VERSION;
 		if (dev->dev_state == MEI_DEV_INIT_CLIENTS &&
 		    dev->hbm_state == MEI_HBM_START) {
 			dev->init_clients_timer = 0;

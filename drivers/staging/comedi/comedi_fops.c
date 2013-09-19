@@ -14,11 +14,6 @@
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
     GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
 */
 
 #undef DEBUG
@@ -31,7 +26,6 @@
 #include <linux/sched.h>
 #include <linux/fcntl.h>
 #include <linux/delay.h>
-#include <linux/ioport.h>
 #include <linux/mm.h>
 #include <linux/slab.h>
 #include <linux/kmod.h>
@@ -246,9 +240,6 @@ static int resize_async_buffer(struct comedi_device *dev,
 		return -EBUSY;
 	}
 
-	if (!async->prealloc_buf)
-		return -EINVAL;
-
 	/* make sure buffer is an integral number of pages
 	 * (we round up) */
 	new_size = (new_size + PAGE_SIZE - 1) & PAGE_MASK;
@@ -270,7 +261,7 @@ static int resize_async_buffer(struct comedi_device *dev,
 
 /* sysfs attribute files */
 
-static ssize_t show_max_read_buffer_kb(struct device *csdev,
+static ssize_t max_read_buffer_kb_show(struct device *csdev,
 				       struct device_attribute *attr, char *buf)
 {
 	unsigned int minor = MINOR(csdev->devt);
@@ -291,7 +282,7 @@ static ssize_t show_max_read_buffer_kb(struct device *csdev,
 	return snprintf(buf, PAGE_SIZE, "%i\n", size);
 }
 
-static ssize_t store_max_read_buffer_kb(struct device *csdev,
+static ssize_t max_read_buffer_kb_store(struct device *csdev,
 					struct device_attribute *attr,
 					const char *buf, size_t count)
 {
@@ -322,8 +313,9 @@ static ssize_t store_max_read_buffer_kb(struct device *csdev,
 
 	return err ? err : count;
 }
+static DEVICE_ATTR_RW(max_read_buffer_kb);
 
-static ssize_t show_read_buffer_kb(struct device *csdev,
+static ssize_t read_buffer_kb_show(struct device *csdev,
 				   struct device_attribute *attr, char *buf)
 {
 	unsigned int minor = MINOR(csdev->devt);
@@ -344,7 +336,7 @@ static ssize_t show_read_buffer_kb(struct device *csdev,
 	return snprintf(buf, PAGE_SIZE, "%i\n", size);
 }
 
-static ssize_t store_read_buffer_kb(struct device *csdev,
+static ssize_t read_buffer_kb_store(struct device *csdev,
 				    struct device_attribute *attr,
 				    const char *buf, size_t count)
 {
@@ -375,8 +367,9 @@ static ssize_t store_read_buffer_kb(struct device *csdev,
 
 	return err ? err : count;
 }
+static DEVICE_ATTR_RW(read_buffer_kb);
 
-static ssize_t show_max_write_buffer_kb(struct device *csdev,
+static ssize_t max_write_buffer_kb_show(struct device *csdev,
 					struct device_attribute *attr,
 					char *buf)
 {
@@ -398,7 +391,7 @@ static ssize_t show_max_write_buffer_kb(struct device *csdev,
 	return snprintf(buf, PAGE_SIZE, "%i\n", size);
 }
 
-static ssize_t store_max_write_buffer_kb(struct device *csdev,
+static ssize_t max_write_buffer_kb_store(struct device *csdev,
 					 struct device_attribute *attr,
 					 const char *buf, size_t count)
 {
@@ -429,8 +422,9 @@ static ssize_t store_max_write_buffer_kb(struct device *csdev,
 
 	return err ? err : count;
 }
+static DEVICE_ATTR_RW(max_write_buffer_kb);
 
-static ssize_t show_write_buffer_kb(struct device *csdev,
+static ssize_t write_buffer_kb_show(struct device *csdev,
 				    struct device_attribute *attr, char *buf)
 {
 	unsigned int minor = MINOR(csdev->devt);
@@ -451,7 +445,7 @@ static ssize_t show_write_buffer_kb(struct device *csdev,
 	return snprintf(buf, PAGE_SIZE, "%i\n", size);
 }
 
-static ssize_t store_write_buffer_kb(struct device *csdev,
+static ssize_t write_buffer_kb_store(struct device *csdev,
 				     struct device_attribute *attr,
 				     const char *buf, size_t count)
 {
@@ -482,18 +476,16 @@ static ssize_t store_write_buffer_kb(struct device *csdev,
 
 	return err ? err : count;
 }
+static DEVICE_ATTR_RW(write_buffer_kb);
 
-static struct device_attribute comedi_dev_attrs[] = {
-	__ATTR(max_read_buffer_kb, S_IRUGO | S_IWUSR,
-		show_max_read_buffer_kb, store_max_read_buffer_kb),
-	__ATTR(read_buffer_kb, S_IRUGO | S_IWUSR | S_IWGRP,
-		show_read_buffer_kb, store_read_buffer_kb),
-	__ATTR(max_write_buffer_kb, S_IRUGO | S_IWUSR,
-		show_max_write_buffer_kb, store_max_write_buffer_kb),
-	__ATTR(write_buffer_kb, S_IRUGO | S_IWUSR | S_IWGRP,
-		show_write_buffer_kb, store_write_buffer_kb),
-	__ATTR_NULL
+static struct attribute *comedi_dev_attrs[] = {
+	&dev_attr_max_read_buffer_kb.attr,
+	&dev_attr_read_buffer_kb.attr,
+	&dev_attr_max_write_buffer_kb.attr,
+	&dev_attr_write_buffer_kb.attr,
+	NULL,
 };
+ATTRIBUTE_GROUPS(comedi_dev);
 
 static void comedi_set_subdevice_runflags(struct comedi_subdevice *s,
 					  unsigned mask, unsigned bits)
@@ -538,6 +530,23 @@ static bool comedi_is_subdevice_idle(struct comedi_subdevice *s)
 
 	return (runflags & (SRF_ERROR | SRF_RUNNING)) ? false : true;
 }
+
+/**
+ * comedi_alloc_spriv() - Allocate memory for the subdevice private data.
+ * @s: comedi_subdevice struct
+ * @size: size of the memory to allocate
+ *
+ * This also sets the subdevice runflags to allow the core to automatically
+ * free the private data during the detach.
+ */
+void *comedi_alloc_spriv(struct comedi_subdevice *s, size_t size)
+{
+	s->private = kzalloc(size, GFP_KERNEL);
+	if (s->private)
+		comedi_set_subdevice_runflags(s, ~0, SRF_FREE_SPRIV);
+	return s->private;
+}
+EXPORT_SYMBOL_GPL(comedi_alloc_spriv);
 
 /*
    This function restores a subdevice to an idle state.
@@ -668,7 +677,7 @@ static int do_bufconfig_ioctl(struct comedi_device *dev,
 	if (copy_from_user(&bc, arg, sizeof(bc)))
 		return -EFAULT;
 
-	if (bc.subdevice >= dev->n_subdevices || bc.subdevice < 0)
+	if (bc.subdevice >= dev->n_subdevices)
 		return -EINVAL;
 
 	s = &dev->subdevices[bc.subdevice];
@@ -921,7 +930,7 @@ static int do_bufinfo_ioctl(struct comedi_device *dev,
 	if (copy_from_user(&bi, arg, sizeof(bi)))
 		return -EFAULT;
 
-	if (bi.subdevice >= dev->n_subdevices || bi.subdevice < 0)
+	if (bi.subdevice >= dev->n_subdevices)
 		return -EINVAL;
 
 	s = &dev->subdevices[bi.subdevice];
@@ -1404,22 +1413,19 @@ static int do_cmd_ioctl(struct comedi_device *dev,
 		DPRINTK("subdevice busy\n");
 		return -EBUSY;
 	}
-	s->busy = file;
 
 	/* make sure channel/gain list isn't too long */
 	if (cmd.chanlist_len > s->len_chanlist) {
 		DPRINTK("channel/gain list too long %u > %d\n",
 			cmd.chanlist_len, s->len_chanlist);
-		ret = -EINVAL;
-		goto cleanup;
+		return -EINVAL;
 	}
 
 	/* make sure channel/gain list isn't too short */
 	if (cmd.chanlist_len < 1) {
 		DPRINTK("channel/gain list too short %u < 1\n",
 			cmd.chanlist_len);
-		ret = -EINVAL;
-		goto cleanup;
+		return -EINVAL;
 	}
 
 	async->cmd = cmd;
@@ -1429,8 +1435,7 @@ static int do_cmd_ioctl(struct comedi_device *dev,
 	    kmalloc(async->cmd.chanlist_len * sizeof(int), GFP_KERNEL);
 	if (!async->cmd.chanlist) {
 		DPRINTK("allocation failed\n");
-		ret = -ENOMEM;
-		goto cleanup;
+		return -ENOMEM;
 	}
 
 	if (copy_from_user(async->cmd.chanlist, user_chanlist,
@@ -1482,6 +1487,9 @@ static int do_cmd_ioctl(struct comedi_device *dev,
 
 	comedi_set_subdevice_runflags(s, ~0, SRF_USER | SRF_RUNNING);
 
+	/* set s->busy _after_ setting SRF_RUNNING flag to avoid race with
+	 * comedi_read() or comedi_write() */
+	s->busy = file;
 	ret = s->do_cmd(dev, s);
 	if (ret == 0)
 		return 0;
@@ -1696,6 +1704,7 @@ static int do_cancel_ioctl(struct comedi_device *dev, unsigned int arg,
 			   void *file)
 {
 	struct comedi_subdevice *s;
+	int ret;
 
 	if (arg >= dev->n_subdevices)
 		return -EINVAL;
@@ -1712,7 +1721,11 @@ static int do_cancel_ioctl(struct comedi_device *dev, unsigned int arg,
 	if (s->busy != file)
 		return -EBUSY;
 
-	return do_cancel(dev, s);
+	ret = do_cancel(dev, s);
+	if (comedi_get_subdevice_runflags(s) & SRF_USER)
+		wake_up_interruptible(&s->async->wait_head);
+
+	return ret;
 }
 
 /*
@@ -2044,11 +2057,13 @@ static ssize_t comedi_write(struct file *file, const char __user *buf,
 
 		if (!comedi_is_subdevice_running(s)) {
 			if (count == 0) {
+				mutex_lock(&dev->mutex);
 				if (comedi_is_subdevice_in_error(s))
 					retval = -EPIPE;
 				else
 					retval = 0;
 				do_become_nonbusy(dev, s);
+				mutex_unlock(&dev->mutex);
 			}
 			break;
 		}
@@ -2147,11 +2162,13 @@ static ssize_t comedi_read(struct file *file, char __user *buf, size_t nbytes,
 
 		if (n == 0) {
 			if (!comedi_is_subdevice_running(s)) {
+				mutex_lock(&dev->mutex);
 				do_become_nonbusy(dev, s);
 				if (comedi_is_subdevice_in_error(s))
 					retval = -EPIPE;
 				else
 					retval = 0;
+				mutex_unlock(&dev->mutex);
 				break;
 			}
 			if (file->f_flags & O_NONBLOCK) {
@@ -2189,9 +2206,11 @@ static ssize_t comedi_read(struct file *file, char __user *buf, size_t nbytes,
 		buf += n;
 		break;		/* makes device work like a pipe */
 	}
-	if (comedi_is_subdevice_idle(s) &&
-	    async->buf_read_count - async->buf_write_count == 0) {
-		do_become_nonbusy(dev, s);
+	if (comedi_is_subdevice_idle(s)) {
+		mutex_lock(&dev->mutex);
+		if (async->buf_read_count - async->buf_write_count == 0)
+			do_become_nonbusy(dev, s);
+		mutex_unlock(&dev->mutex);
 	}
 	set_current_state(TASK_RUNNING);
 	remove_wait_queue(&async->wait_head, &wait);
@@ -2319,9 +2338,6 @@ static int comedi_close(struct inode *inode, struct file *file)
 	dev->use_count--;
 
 	mutex_unlock(&dev->mutex);
-
-	if (file->f_flags & FASYNC)
-		comedi_fasync(-1, file, 0);
 
 	return 0;
 }
@@ -2548,7 +2564,7 @@ static int __init comedi_init(void)
 		return PTR_ERR(comedi_class);
 	}
 
-	comedi_class->dev_attrs = comedi_dev_attrs;
+	comedi_class->dev_groups = comedi_dev_groups;
 
 	/* XXX requires /proc interface */
 	comedi_proc_init();

@@ -41,11 +41,14 @@ struct mxs_phy {
 
 #define to_mxs_phy(p) container_of((p), struct mxs_phy, phy)
 
-static void mxs_phy_hw_init(struct mxs_phy *mxs_phy)
+static int mxs_phy_hw_init(struct mxs_phy *mxs_phy)
 {
+	int ret;
 	void __iomem *base = mxs_phy->phy.io_priv;
 
-	stmp_reset_block(base + HW_USBPHY_CTRL);
+	ret = stmp_reset_block(base + HW_USBPHY_CTRL);
+	if (ret)
+		return ret;
 
 	/* Power up the PHY */
 	writel(0, base + HW_USBPHY_PWD);
@@ -54,6 +57,8 @@ static void mxs_phy_hw_init(struct mxs_phy *mxs_phy)
 	writel(BM_USBPHY_CTRL_ENUTMILEVEL2 |
 	       BM_USBPHY_CTRL_ENUTMILEVEL3,
 	       base + HW_USBPHY_CTRL_SET);
+
+	return 0;
 }
 
 static int mxs_phy_init(struct usb_phy *phy)
@@ -61,9 +66,7 @@ static int mxs_phy_init(struct usb_phy *phy)
 	struct mxs_phy *mxs_phy = to_mxs_phy(phy);
 
 	clk_prepare_enable(mxs_phy->clk);
-	mxs_phy_hw_init(mxs_phy);
-
-	return 0;
+	return mxs_phy_hw_init(mxs_phy);
 }
 
 static void mxs_phy_shutdown(struct usb_phy *phy)
@@ -130,11 +133,6 @@ static int mxs_phy_probe(struct platform_device *pdev)
 	int ret;
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	if (!res) {
-		dev_err(&pdev->dev, "can't get device resources\n");
-		return -ENOENT;
-	}
-
 	base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(base))
 		return PTR_ERR(base);
@@ -160,6 +158,7 @@ static int mxs_phy_probe(struct platform_device *pdev)
 	mxs_phy->phy.set_suspend	= mxs_phy_suspend;
 	mxs_phy->phy.notify_connect	= mxs_phy_on_connect;
 	mxs_phy->phy.notify_disconnect	= mxs_phy_on_disconnect;
+	mxs_phy->phy.type		= USB_PHY_TYPE_USB2;
 
 	ATOMIC_INIT_NOTIFIER_HEAD(&mxs_phy->phy.notifier);
 
@@ -179,8 +178,6 @@ static int mxs_phy_remove(struct platform_device *pdev)
 	struct mxs_phy *mxs_phy = platform_get_drvdata(pdev);
 
 	usb_remove_phy(&mxs_phy->phy);
-
-	platform_set_drvdata(pdev, NULL);
 
 	return 0;
 }

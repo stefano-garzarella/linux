@@ -1750,10 +1750,10 @@ static const struct media_entity_operations isif_media_ops = {
 void vpfe_isif_unregister_entities(struct vpfe_isif_device *isif)
 {
 	vpfe_video_unregister(&isif->video_out);
-	/* cleanup entity */
-	media_entity_cleanup(&isif->subdev.entity);
 	/* unregister subdev */
 	v4l2_device_unregister_subdev(&isif->subdev);
+	/* cleanup entity */
+	media_entity_cleanup(&isif->subdev.entity);
 }
 
 static void isif_restore_defaults(struct vpfe_isif_device *isif)
@@ -1953,7 +1953,7 @@ static void isif_remove(struct vpfe_isif_device *isif,
 		res = platform_get_resource(pdev, IORESOURCE_MEM, i);
 		if (res)
 			release_mem_region(res->start,
-					   res->end - res->start + 1);
+					   resource_size(res));
 		i++;
 	}
 }
@@ -2003,7 +2003,7 @@ int vpfe_isif_init(struct vpfe_isif_device *isif, struct platform_device *pdev)
 			status = -ENOENT;
 			goto fail_nobase_res;
 		}
-		res_len = res->end - res->start + 1;
+		res_len = resource_size(res);
 		res = request_mem_region(res->start, res_len, res->name);
 		if (!res) {
 			status = -EBUSY;
