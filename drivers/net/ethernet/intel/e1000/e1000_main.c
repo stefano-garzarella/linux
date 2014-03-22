@@ -463,23 +463,25 @@ static void e1000_configure(struct e1000_adapter *adapter)
 static int e1000_configure_csb(struct e1000_adapter * adapter)
 {
 	struct e1000_hw *hw = &adapter->hw;
+	struct net_device *netdev = adapter->netdev;
 
 	/* Probe for paravirtual device extension, if required. */
 	if (paravirtual && adapter->pdev->subsystem_device == E1000_PARAVIRT_SUBDEV) {
-		printk("[e1000] Device supports paravirtualization\n");
+		pr_info("%s supports paravirtualization\n", netdev->name);
 
                 /* Try to allocate a MSI-X interrupt vector. */
                 adapter->msix_enabled = e1000_request_msix_vectors(adapter);
                 adapter->msix_enabled = !adapter->msix_enabled;
                 if (adapter->msix_enabled)
-                    printk("[e1000] Interrupt mode: MSI-X\n");
+                    pr_info("%s interrupt mode: MSI-X\n", netdev->name);
                 else
-                    printk("[e1000] Unable to allocate MSI-X vectors\n");
+                    pr_err("%s unable to allocate MSI-X vectors\n", netdev->name);
 
 		/* Allocate the CSB.*/
 		adapter->csb = kmalloc(NET_PARAVIRT_CSB_SIZE, GFP_KERNEL);
 		if (!adapter->csb) {
-			printk("Communication Status Block allocation failed!");
+			pr_err("%s Communication Status Block allocation failed!",
+					netdev->name);
 			return -1;
 		}
 		/* The first four values must match the register initial
@@ -4272,7 +4274,7 @@ static void e1000_receive_skb(struct e1000_adapter *adapter, u8 status,
 
 	if (hdr->flags & VIRTIO_NET_HDR_F_NEEDS_CSUM) {
 		if (!skb_partial_csum_set(skb, hdr->csum_start, hdr->csum_offset)) {
-			printk("[e1000] ERR1\n");
+			pr_err("%s ERR1\n", adapter->netdev->name);
 			goto frame_err;
 		}
 	} else if (hdr->flags & VIRTIO_NET_HDR_F_DATA_VALID) {
@@ -4299,7 +4301,7 @@ static void e1000_receive_skb(struct e1000_adapter *adapter, u8 status,
 			skb_shinfo(skb)->gso_type = SKB_GSO_TCPV6;
 			break;
 		default:
-			printk("[e1000] ERR2\n");
+			pr_err("%s ERR2\n", adapter->netdev->name);
 			goto frame_err;
 		}
 
@@ -4308,7 +4310,7 @@ static void e1000_receive_skb(struct e1000_adapter *adapter, u8 status,
 
 		skb_shinfo(skb)->gso_size = hdr->gso_size;
 		if (skb_shinfo(skb)->gso_size == 0) {
-			printk("[e1000] ERR3\n");
+			pr_err("%s ERR3\n", adapter->netdev->name);
 			goto frame_err;
 		}
 
@@ -4426,7 +4428,8 @@ static bool e1000_clean_jumbo_rx_irq(struct e1000_adapter *adapter,
 		   should never happen for a properly working (emulated)
 		   device. */
 		if (unlikely(frags_used > MAX_SKB_FRAGS)) {
-			printk("Receive packet requires more than MAX_SKB_FRAGS(=%d) frags\n", (int)MAX_SKB_FRAGS);
+			pr_err("%s receive packet requires more than MAX_SKB_FRAGS(=%d) frags\n",
+					netdev->name, (int)MAX_SKB_FRAGS);
 			/* recycle both page and skb */
 			buffer_info->skb = skb;
 			if (rx_ring->rx_skb_top)
