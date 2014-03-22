@@ -25,6 +25,7 @@
   Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
 
 *******************************************************************************/
+#define CONFIG_E1000_NETMAP_PT
 
 #include "e1000.h"
 #include <net/ip6_checksum.h>
@@ -33,6 +34,11 @@
 #include <linux/bitops.h>
 #include <linux/if_vlan.h>
 #include <linux/virtio_net.h>
+
+#ifdef CONFIG_E1000_NETMAP_PT
+#define NETMAP_PT_BASE 	1
+#define NETMAP_PT_FULL 	2
+#endif /* CONFIG_E1000_NETMAP_PT */
 
 char e1000_driver_name[] = "e1000";
 static char e1000_driver_string[] = "Intel(R) PRO/1000 Network Driver";
@@ -468,6 +474,17 @@ static int e1000_configure_csb(struct e1000_adapter * adapter)
 	/* Probe for paravirtual device extension, if required. */
 	if (paravirtual && adapter->pdev->subsystem_device == E1000_PARAVIRT_SUBDEV) {
 		pr_info("%s supports paravirtualization\n", netdev->name);
+
+#ifdef CONFIG_E1000_NETMAP_PT
+		/* tell the device the features we support */
+		ew32(PTFEAT, NETMAP_PT_BASE | NETMAP_PT_FULL); /* we are cheating for now */
+		/* get back the acknowledged features */
+		adapter->netmap_pt_features = er32(PTFEAT);
+		pr_info("%s netmap passthrough: %s", netdev->name,
+				(adapter->netmap_pt_features & NETMAP_PT_FULL) ? "full" :
+				(adapter->netmap_pt_features & NETMAP_PT_BASE) ? "base" :
+				"none");
+#endif /* CONFIG_E1000_NETMAP_PT */
 
                 /* Try to allocate a MSI-X interrupt vector. */
                 adapter->msix_enabled = e1000_request_msix_vectors(adapter);

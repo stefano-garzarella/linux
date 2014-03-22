@@ -1044,6 +1044,7 @@ struct e1000_ffvt_entry {
 #define E1000_HICR      0x08F00	/* Host Interface Control */
 #define E1000_CSBBAL	0x02830 /* CSB Base Address High */
 #define E1000_CSBBAH	0x02834 /* CSB Base Address Low */
+#define E1000_PTFEAT	0x02838 /* passthrough features */
 
 /* RSS registers */
 #define E1000_CPUVEC    0x02C10	/* CPU Vector Register - RW */
@@ -1278,6 +1279,7 @@ struct e1000_ffvt_entry {
 #define E1000_82542_SW_FW_SYNC E1000_SW_FW_SYNC
 #define E1000_82542_CSBBAL	E1000_CSBBAL
 #define E1000_82542_CSBBAH	E1000_CSBBAH
+#define E1000_82542_PTFEAT	E1000_PTFEAT
 
 /* Statistics counters collected by the MAC */
 struct e1000_hw_stats {

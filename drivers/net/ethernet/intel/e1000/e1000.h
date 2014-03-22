@@ -330,6 +330,10 @@ struct e1000_adapter {
         cpumask_var_t msix_affinity_masks[2];
         int msix_enabled;
 
+#ifdef CONFIG_E1000_NETMAP_PT
+	uint32_t netmap_pt_features;
+#endif
+
 };
 
 enum e1000_state_t {
