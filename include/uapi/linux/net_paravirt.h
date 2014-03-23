@@ -76,10 +76,21 @@ struct paravirt_csb {
     uint32_t host_rxkick_at;  /* Ring index where host expects an rxkick. */
     uint32_t vnet_ring_high;	/* Vnet ring physical address high. */
     uint32_t vnet_ring_low;	/* Vnet ring physical address low. */
+
+    /* passthrough */
+    uint32_t memsize;		
 };
 
 #define NET_PARAVIRT_CSB_SIZE   4096
 #define NET_PARAVIRT_NONE   (~((uint32_t)0))
+
+/* passthrough commands */
+#define NET_PARAVIRT_PTCTL_CONFIG	1
+#define NET_PARAVIRT_PTCTL_FINALIZE	2
+#define NET_PARAVIRT_PTCTL_IFNEW	3
+#define NET_PARAVIRT_PTCTL_IFDELETE	4
+#define NET_PARAVIRT_PTCTL_RINGSCREATE	5
+#define NET_PARAVIRT_PTCTL_RINGSDELETE	6
 
 #ifdef	QEMU_PCI_H
 
