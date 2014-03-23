@@ -25,7 +25,6 @@
   Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
 
 *******************************************************************************/
-#define CONFIG_E1000_NETMAP_PT
 
 #include "e1000.h"
 #include <net/ip6_checksum.h>

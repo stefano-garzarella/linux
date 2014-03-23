@@ -64,6 +64,17 @@ config E1000
 	  To compile this driver as a module, choose M here. The module
 	  will be called e1000.
 
+config E1000_NETMAP_PT
+	bool "Support for e1000-paravirtual/netmap passthrough"
+	default y
+	depends on E1000
+	---help---
+	  Say Y if you want to add support for netmap passthrough.
+
+	  This only adds the e1000-specific part. You still need the
+          netmap patches for the driver and proper support in the
+          hypervisor.
+
 config E1000E
 	tristate "Intel(R) PRO/1000 PCI-Express Gigabit Ethernet support"
 	depends on PCI && (!SPARC32 || BROKEN)
