@@ -1045,6 +1045,8 @@ struct e1000_ffvt_entry {
 #define E1000_CSBBAL	0x02830 /* CSB Base Address High */
 #define E1000_CSBBAH	0x02834 /* CSB Base Address Low */
 #define E1000_PTFEAT	0x02838 /* passthrough features */
+#define E1000_PTCTL	0x0283C /* passthrough control */
+#define E1000_PTSTS	0x02840 /* passthrough status */
 
 /* RSS registers */
 #define E1000_CPUVEC    0x02C10	/* CPU Vector Register - RW */
@@ -1280,6 +1282,8 @@ struct e1000_ffvt_entry {
 #define E1000_82542_CSBBAL	E1000_CSBBAL
 #define E1000_82542_CSBBAH	E1000_CSBBAH
 #define E1000_82542_PTFEAT	E1000_PTFEAT
+#define E1000_82542_PTCTL	E1000_PTCTL
+#define E1000_82542_PTSTS	E1000_PTSTS
 
 /* Statistics counters collected by the MAC */
 struct e1000_hw_stats {

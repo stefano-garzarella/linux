@@ -5606,4 +5606,17 @@ static void e1000_io_resume(struct pci_dev *pdev)
 	netif_device_attach(netdev);
 }
 
+#ifdef CONFIG_E1000_NETMAP_PT
+
+uint32_t e1000_netmap_ptctl(struct net_device *netdev, uint32_t val)
+{
+	struct e1000_adapter *adapter = netdev_priv(netdev);
+	struct e1000_hw *hw = &adapter->hw;
+
+	ew32(PTCTL, val);
+	return er32(PTSTS);
+}
+
+#endif
+
 /* e1000_main.c */
