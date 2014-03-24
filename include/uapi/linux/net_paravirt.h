@@ -78,7 +78,10 @@ struct paravirt_csb {
     uint32_t vnet_ring_low;	/* Vnet ring physical address low. */
 
     /* passthrough */
-    uint32_t memsize;		
+    uint32_t memsize;              /* size of the shared memory */
+    uint32_t pci_bar;              /* pci bar of the shared memory in the device */
+    uint32_t nifp_offset;          /* offset of the netmap_if in the shared memory */
+    uint64_t base_addr;
 };
 
 #define NET_PARAVIRT_CSB_SIZE   4096
@@ -91,6 +94,7 @@ struct paravirt_csb {
 #define NET_PARAVIRT_PTCTL_IFDELETE	4
 #define NET_PARAVIRT_PTCTL_RINGSCREATE	5
 #define NET_PARAVIRT_PTCTL_RINGSDELETE	6
+#define NET_PARAVIRT_PTCTL_DEREF	7
 
 #ifdef	QEMU_PCI_H
 
