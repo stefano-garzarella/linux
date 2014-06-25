@@ -4069,7 +4069,7 @@ static int e1000_clean(struct napi_struct *napi, int budget)
 	int tx_clean_complete = 0, work_done = 0;
 	struct e1000_rx_desc * rxd = NULL;
 
-	if (!adapter->csb_mode)
+	if (!adapter->csb_mode || adapter->passthrough)
 		tx_clean_complete = e1000_clean_tx_irq(adapter, &adapter->tx_ring[0]);
 
 	adapter->clean_rx(adapter, &adapter->rx_ring[0], &work_done, budget);

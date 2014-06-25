@@ -332,6 +332,7 @@ struct e1000_adapter {
 
 #ifdef CONFIG_E1000_NETMAP_PT
 	uint32_t netmap_pt_features;
+	int passthrough;
 #endif
 
 };
