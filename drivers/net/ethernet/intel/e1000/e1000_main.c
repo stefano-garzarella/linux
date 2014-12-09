@@ -4004,7 +4004,17 @@ static irqreturn_t e1000_msix_intr_data(int irq, void *data)
 	    /* Wakes the TX queue so that the start_xmit() method can
 	       clean used TX descriptors and continue transmitting. */
 	    adapter->csb->guest_need_txkick = 0;
-	    netif_wake_queue(netdev);
+            if (!adapter->passthrough)
+	        netif_wake_queue(netdev);
+#if 1
+            else { /* With netmap-passthrough avoid NAPI */
+                int work_done;
+	        adapter->csb->guest_need_rxkick = 0;
+
+                if (netmap_tx_irq(netdev, 0) && netmap_rx_irq(netdev, 0, &work_done))
+                    return IRQ_HANDLED;
+            }
+#endif
 	}
 	if (!adapter->csb_mode) {
 		/* disable interrupts, without the synchronize_irq bit */
@@ -4082,7 +4092,7 @@ static int e1000_clean(struct napi_struct *napi, int budget)
 		if (likely(adapter->itr_setting & 3))
 			e1000_set_itr(adapter);
 		napi_complete(napi);
-		if (adapter->csb_mode) {
+		if (adapter->csb_mode && !adapter->passthrough) {
 			/* Enable host TX/RX interrupts. */
 			adapter->csb->guest_need_rxkick = 1;
 			mb();
