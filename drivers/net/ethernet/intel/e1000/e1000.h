@@ -81,6 +81,36 @@ struct e1000_adapter;
 
 #include "e1000_hw.h"
 
+#ifdef CONFIG_E1000_NETMAP_PT
+#define RATE  /* Enables communication statistics. */
+#ifdef RATE
+#define IFRATE(x) x
+struct rate_stats {
+    unsigned long msix_intr;     /* Interrupts. */
+    unsigned long napi_sched;     /* Interrupts. */
+    unsigned long clean;     /* Interrupts. */
+    unsigned long clean_tx;     /* Interrupts. */
+    unsigned long tx_sync;     /* Interrupts. */
+    unsigned long tx_kick;     /* Interrupts. */
+    unsigned long clean_rx;     /* Interrupts. */
+    unsigned long rx_sync;     /* Interrupts. */
+    unsigned long rx_kick;     /* Interrupts. */
+};
+
+struct rate_context {
+    struct timer_list timer;
+    struct rate_stats new;
+    struct rate_stats old;
+    char name[64];
+};
+
+#define RATE_PERIOD  2
+void rate_callback(unsigned long arg);
+#else /* !RATE */
+#define IFRATE(x)
+#endif /* RATE */
+#endif /* CONFIG_E1000_NETMAP_PT */
+
 #define E1000_MAX_INTR			10
 
 /* TX/RX descriptor defines */
@@ -333,6 +363,7 @@ struct e1000_adapter {
 #ifdef CONFIG_E1000_NETMAP_PT
 	uint32_t netmap_pt_features;
 	int passthrough;
+        IFRATE(struct rate_context rate_ctx);
 #endif
 
 };

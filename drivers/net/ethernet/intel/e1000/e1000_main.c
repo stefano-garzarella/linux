@@ -37,6 +37,30 @@
 #ifdef CONFIG_E1000_NETMAP_PT
 #define NETMAP_PT_BASE 	1
 #define NETMAP_PT_FULL 	2
+void rate_callback(unsigned long arg)
+{
+    struct rate_context * ctx = (struct rate_context *)arg;
+    struct rate_stats cur = ctx->new;
+    int r;
+
+    printk("%s\n", ctx->name);
+    printk("msix_intr = %lu Hz\n", (cur.msix_intr - ctx->old.msix_intr)/RATE_PERIOD);
+    printk("napi_sched = %lu Hz\n", (cur.napi_sched - ctx->old.napi_sched)/RATE_PERIOD);
+    printk("clean = %lu Hz\n", (cur.clean - ctx->old.clean)/RATE_PERIOD);
+    printk("clean_tx = %lu Hz\n", (cur.clean_tx - ctx->old.clean_tx)/RATE_PERIOD);
+    printk("tx_sync = %lu Hz\n", (cur.tx_sync - ctx->old.tx_sync)/RATE_PERIOD);
+    printk("tx_kick = %lu Hz\n", (cur.tx_kick - ctx->old.tx_kick)/RATE_PERIOD);
+    printk("clean_rx = %lu Hz\n", (cur.clean_rx - ctx->old.clean_rx)/RATE_PERIOD);
+    printk("rx_sync = %lu Hz\n", (cur.rx_sync - ctx->old.rx_sync)/RATE_PERIOD);
+    printk("rx_kick = %lu Hz\n", (cur.rx_kick - ctx->old.rx_kick)/RATE_PERIOD);
+    printk("\n");
+
+    ctx->old = cur;
+    r = mod_timer(&ctx->timer, jiffies +
+            msecs_to_jiffies(RATE_PERIOD * 1000));
+    if (unlikely(r))
+        printk("[e1000] Error: mod_timer()\n");
+}
 #endif /* CONFIG_E1000_NETMAP_PT */
 
 char e1000_driver_name[] = "e1000";
@@ -1401,6 +1425,16 @@ static int e1000_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	netif_carrier_off(netdev);
 
 	e_info(probe, "Intel(R) PRO/1000 Network Connection\n");
+
+#ifdef RATE
+        memset(&adapter->rate_ctx, 0, sizeof(adapter->rate_ctx));
+        setup_timer(&adapter->rate_ctx.timer, &rate_callback,
+                (unsigned long)&adapter->rate_ctx);
+        strncpy(adapter->rate_ctx.name, netdev->name, sizeof(adapter->rate_ctx.name));
+        if (mod_timer(&adapter->rate_ctx.timer, jiffies + msecs_to_jiffies(1500)))
+            printk("[e1000] Error: mod_timer()\n");
+#endif
+
 
 	cards_found++;
 	return 0;
@@ -4000,6 +4034,8 @@ static irqreturn_t e1000_msix_intr_data(int irq, void *data)
 	struct e1000_adapter *adapter = netdev_priv(netdev);
 	struct e1000_hw *hw = &adapter->hw;
 
+        IFRATE(adapter->rate_ctx.new.msix_intr++);
+
 	if (adapter->csb_mode) {
 	    /* Wakes the TX queue so that the start_xmit() method can
 	       clean used TX descriptors and continue transmitting. */
@@ -4030,6 +4066,7 @@ static irqreturn_t e1000_msix_intr_data(int irq, void *data)
 		adapter->total_rx_bytes = 0;
 		adapter->total_rx_packets = 0;
 		__napi_schedule(&adapter->napi);
+                IFRATE(adapter->rate_ctx.new.napi_sched++);
 	} else {
 		/* this really should not happen! if it does it is basically a
 		 * bug, but not a hard error, so enable ints and continue
@@ -4078,6 +4115,8 @@ static int e1000_clean(struct napi_struct *napi, int budget)
 						     napi);
 	int tx_clean_complete = 0, work_done = 0;
 	struct e1000_rx_desc * rxd = NULL;
+
+        IFRATE(adapter->rate_ctx.new.clean++);
 
 	if (!adapter->csb_mode || adapter->passthrough)
 		tx_clean_complete = e1000_clean_tx_irq(adapter, &adapter->tx_ring[0]);
@@ -4130,6 +4169,8 @@ static bool e1000_clean_tx_irq(struct e1000_adapter *adapter,
 	unsigned int count = 0;
 	unsigned int total_tx_bytes=0, total_tx_packets=0;
 	unsigned int bytes_compl = 0, pkts_compl = 0;
+
+        IFRATE(adapter->rate_ctx.new.clean_tx++);
 
 	i = tx_ring->next_to_clean;
 	eop = tx_ring->buffer_info[i].next_to_watch;
@@ -4378,6 +4419,8 @@ static bool e1000_clean_jumbo_rx_irq(struct e1000_adapter *adapter,
 	unsigned int total_rx_bytes=0, total_rx_packets=0;
 	struct virtio_net_hdr * hdr = NULL;
 	unsigned int frags_used = 0;
+
+        IFRATE(adapter->rate_ctx.new.clean_rx++);
 
 	i = rx_ring->next_to_clean;
 	rx_desc = E1000_RX_DESC(*rx_ring, i);
