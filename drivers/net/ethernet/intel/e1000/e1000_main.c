@@ -37,6 +37,7 @@
 #ifdef CONFIG_E1000_NETMAP_PT
 #define NETMAP_PT_BASE 	1
 #define NETMAP_PT_FULL 	2
+#ifdef RATE
 void rate_callback(unsigned long arg)
 {
     struct rate_context * ctx = (struct rate_context *)arg;
@@ -61,6 +62,7 @@ void rate_callback(unsigned long arg)
     if (unlikely(r))
         printk("[e1000] Error: mod_timer()\n");
 }
+#endif /* RATE */
 #endif /* CONFIG_E1000_NETMAP_PT */
 
 char e1000_driver_name[] = "e1000";
