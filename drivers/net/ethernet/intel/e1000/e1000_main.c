@@ -4044,7 +4044,7 @@ static irqreturn_t e1000_msix_intr_data(int irq, void *data)
 	    adapter->csb->guest_need_txkick = 0;
             if (!adapter->passthrough)
 	        netif_wake_queue(netdev);
-#if 1
+#if 0
             else { /* With netmap-passthrough avoid NAPI */
                 int work_done;
 	        adapter->csb->guest_need_rxkick = 0;
@@ -4069,7 +4069,7 @@ static irqreturn_t e1000_msix_intr_data(int irq, void *data)
 		adapter->total_rx_packets = 0;
 		__napi_schedule(&adapter->napi);
                 IFRATE(adapter->rate_ctx.new.napi_sched++);
-	} else {
+	} else  if (!adapter->csb_mode) {
 		/* this really should not happen! if it does it is basically a
 		 * bug, but not a hard error, so enable ints and continue
 		 */
@@ -4125,6 +4125,12 @@ static int e1000_clean(struct napi_struct *napi, int budget)
 
 	adapter->clean_rx(adapter, &adapter->rx_ring[0], &work_done, budget);
 	
+	if (adapter->passthrough) {
+	    napi_complete(napi);
+	    adapter->csb->guest_need_rxkick = 1;
+	    return work_done;
+	}
+
 	if (!adapter->csb_mode && !tx_clean_complete)
 		work_done = budget;
 
@@ -4133,7 +4139,7 @@ static int e1000_clean(struct napi_struct *napi, int budget)
 		if (likely(adapter->itr_setting & 3))
 			e1000_set_itr(adapter);
 		napi_complete(napi);
-		if (adapter->csb_mode && !adapter->passthrough) {
+		if (adapter->csb_mode) {
 			/* Enable host TX/RX interrupts. */
 			adapter->csb->guest_need_rxkick = 1;
 			mb();
