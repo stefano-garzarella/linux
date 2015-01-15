@@ -4038,21 +4038,11 @@ static irqreturn_t e1000_msix_intr_data(int irq, void *data)
 
         IFRATE(adapter->rate_ctx.new.msix_intr++);
 
-	if (adapter->csb_mode) {
+	if (adapter->csb_mode && !adapter->passthrough) {
 	    /* Wakes the TX queue so that the start_xmit() method can
 	       clean used TX descriptors and continue transmitting. */
 	    adapter->csb->guest_need_txkick = 0;
-            if (!adapter->passthrough)
-	        netif_wake_queue(netdev);
-#if 0
-            else { /* With netmap-passthrough avoid NAPI */
-                int work_done;
-	        adapter->csb->guest_need_rxkick = 0;
-
-                if (netmap_tx_irq(netdev, 0) && netmap_rx_irq(netdev, 0, &work_done))
-                    return IRQ_HANDLED;
-            }
-#endif
+	    netif_wake_queue(netdev);
 	}
 	if (!adapter->csb_mode) {
 		/* disable interrupts, without the synchronize_irq bit */
@@ -4061,7 +4051,7 @@ static irqreturn_t e1000_msix_intr_data(int irq, void *data)
 	}
 
 	if (likely(napi_schedule_prep(&adapter->napi))) {
-		if (adapter->csb_mode)
+		if (adapter->csb_mode && !adapter->passthrough)
 			adapter->csb->guest_need_rxkick = 0;
 		adapter->total_tx_bytes = 0;
 		adapter->total_tx_packets = 0;
@@ -4127,7 +4117,6 @@ static int e1000_clean(struct napi_struct *napi, int budget)
 	
 	if (adapter->passthrough) {
 	    napi_complete(napi);
-	    adapter->csb->guest_need_rxkick = 1;
 	    return work_done;
 	}
 
