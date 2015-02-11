@@ -491,12 +491,11 @@ static void e1000_configure(struct e1000_adapter *adapter)
 	}
 }
 
-static int e1000_configure_csb(struct e1000_adapter * adapter)
+static int e1000_alloc_csb(struct e1000_adapter * adapter)
 {
 	struct e1000_hw *hw = &adapter->hw;
 	struct net_device *netdev = adapter->netdev;
 
-	/* Probe for paravirtual device extension, if required. */
 	if (paravirtual && adapter->pdev->subsystem_device == E1000_PARAVIRT_SUBDEV) {
 		pr_info("%s supports paravirtualization\n", netdev->name);
 
@@ -505,11 +504,39 @@ static int e1000_configure_csb(struct e1000_adapter * adapter)
 		ew32(PTFEAT, NETMAP_PT_BASE | NETMAP_PT_FULL); /* we are cheating for now */
 		/* get back the acknowledged features */
 		adapter->netmap_pt_features = er32(PTFEAT);
-		pr_info("%s netmap passthrough: %s", netdev->name,
+		pr_info("%s netmap passthrough: %s\n", netdev->name,
 				(adapter->netmap_pt_features & NETMAP_PT_FULL) ? "full" :
 				(adapter->netmap_pt_features & NETMAP_PT_BASE) ? "base" :
 				"none");
 #endif /* CONFIG_E1000_NETMAP_PT */
+
+		if (adapter->csb)
+			return 0;
+
+		/* Allocate the CSB.*/
+		adapter->csb = kmalloc(NET_PARAVIRT_CSB_SIZE, GFP_KERNEL);
+		if (!adapter->csb) {
+			pr_err("%s Communication Status Block allocation failed!",
+					netdev->name);
+			return -1;
+		}
+		adapter->csb_phyaddr = virt_to_phys(adapter->csb);
+
+
+	}
+
+	return 0;
+}
+
+static int e1000_configure_csb(struct e1000_adapter * adapter)
+{
+	struct e1000_hw *hw = &adapter->hw;
+	struct net_device *netdev = adapter->netdev;
+
+	/* Probe for paravirtual device extension, if required. */
+	if (adapter->csb && paravirtual &&
+			adapter->pdev->subsystem_device == E1000_PARAVIRT_SUBDEV) {
+		pr_info("%s supports paravirtualization\n", netdev->name);
 
                 /* Try to allocate a MSI-X interrupt vector. */
                 adapter->msix_enabled = e1000_request_msix_vectors(adapter);
@@ -519,13 +546,6 @@ static int e1000_configure_csb(struct e1000_adapter * adapter)
                 else
                     pr_err("%s unable to allocate MSI-X vectors\n", netdev->name);
 
-		/* Allocate the CSB.*/
-		adapter->csb = kmalloc(NET_PARAVIRT_CSB_SIZE, GFP_KERNEL);
-		if (!adapter->csb) {
-			pr_err("%s Communication Status Block allocation failed!",
-					netdev->name);
-			return -1;
-		}
 		/* The first four values must match the register initial
 		   values set by e1000_configure_rx() and
 		   e1000_configure_tx(). */
@@ -546,7 +566,6 @@ static int e1000_configure_csb(struct e1000_adapter * adapter)
 		adapter->csb->host_txcycles = 0;
 		adapter->csb->vnet_ring_high = (adapter->rx_ring->vnet_dma >> 32);
 		adapter->csb->vnet_ring_low = (adapter->rx_ring->vnet_dma & 0x00000000ffffffffULL);
-		adapter->csb_phyaddr = virt_to_phys(adapter->csb);
 		adapter->csb_mode = adapter->csb->guest_csb_on;
 
 		if (adapter->csb_mode) {
@@ -566,7 +585,6 @@ static int e1000_configure_csb(struct e1000_adapter * adapter)
 		ew32(CSBBAH, (adapter->csb_phyaddr >> 32));
 		ew32(CSBBAL, (adapter->csb_phyaddr & 0x00000000ffffffffULL));
 	} else {
-	    adapter->csb = NULL;
 	    adapter->csb_mode = 0;
             adapter->msix_enabled = 0;
 	}
@@ -574,7 +592,7 @@ static int e1000_configure_csb(struct e1000_adapter * adapter)
 	return 0;
 }
 
-static void e1000_free_csb(struct e1000_adapter *adapter)
+static void e1000_disable_csb(struct e1000_adapter *adapter)
 {
         if (adapter->msix_enabled) {
                 free_irq(adapter->msix_entries[0].vector, adapter->netdev);
@@ -583,8 +601,22 @@ static void e1000_free_csb(struct e1000_adapter *adapter)
                 free_cpumask_var(adapter->msix_affinity_masks[0]);
                 free_cpumask_var(adapter->msix_affinity_masks[1]);
         }
-	if (adapter->csb)
+
+	adapter->csb_mode = 0;
+}
+
+static void e1000_free_csb(struct e1000_adapter *adapter)
+{
+	struct e1000_hw *hw = &adapter->hw;
+
+	if (adapter->csb) {
+		/* CSB deallocation protocol. */
+		ew32(CSBBAH, 0);
+		ew32(CSBBAL, 0);
+
 		kfree(adapter->csb);
+		adapter->csb = NULL;
+	}
 }
 
 int e1000_up(struct e1000_adapter *adapter)
@@ -733,7 +765,7 @@ void e1000_down(struct e1000_adapter *adapter)
 	e1000_reset(adapter);
 	e1000_clean_all_tx_rings(adapter);
 	e1000_clean_all_rx_rings(adapter);
-        e1000_free_csb(adapter);
+        e1000_disable_csb(adapter);
 }
 
 static void e1000_reinit_safe(struct e1000_adapter *adapter)
@@ -1411,6 +1443,11 @@ static int e1000_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (err)
 		goto err_register;
 
+	err = e1000_alloc_csb(adapter);
+	if (err)
+		goto err_register;
+
+
 	e1000_vlan_filter_on_off(adapter, false);
 
 	/* print bus type/speed/width info */
@@ -1477,6 +1514,8 @@ static void e1000_remove(struct pci_dev *pdev)
 	struct net_device *netdev = pci_get_drvdata(pdev);
 	struct e1000_adapter *adapter = netdev_priv(netdev);
 	struct e1000_hw *hw = &adapter->hw;
+
+	e1000_free_csb(adapter);
 
 	e1000_down_and_stop(adapter);
 	e1000_release_manageability(adapter);
@@ -1604,7 +1643,7 @@ static int e1000_open(struct net_device *netdev)
 	e1000_configure(adapter);
 
 	if (e1000_configure_csb(adapter) < 0)
-	    goto err_alloc_csb;
+	    goto err_config_csb;
 
         err = e1000_request_irq(adapter);
         if (err)
@@ -1626,8 +1665,8 @@ static int e1000_open(struct net_device *netdev)
 
 err_req_irq:
 	e1000_power_down_phy(adapter);
-        e1000_free_csb(adapter);
-err_alloc_csb:
+        e1000_disable_csb(adapter);
+err_config_csb:
 	e1000_free_all_rx_resources(adapter);
 err_setup_rx:
 	e1000_free_all_tx_resources(adapter);
