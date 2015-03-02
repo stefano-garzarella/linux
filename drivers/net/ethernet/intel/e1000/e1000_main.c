@@ -35,8 +35,6 @@
 #include <linux/virtio_net.h>
 
 #ifdef CONFIG_E1000_NETMAP_PT
-#define NETMAP_PT_BASE 	1
-#define NETMAP_PT_FULL 	2
 #ifdef RATE
 void rate_callback(unsigned long arg)
 {
@@ -501,12 +499,12 @@ static int e1000_alloc_csb(struct e1000_adapter * adapter)
 
 #ifdef CONFIG_E1000_NETMAP_PT
 		/* tell the device the features we support */
-		ew32(PTFEAT, NETMAP_PT_BASE | NETMAP_PT_FULL); /* we are cheating for now */
+		ew32(PTFEAT, NET_PTN_FEATURES_BASE | NET_PTN_FEATURES_FULL); /* we are cheating for now */
 		/* get back the acknowledged features */
 		adapter->netmap_pt_features = er32(PTFEAT);
 		pr_info("%s netmap passthrough: %s\n", netdev->name,
-				(adapter->netmap_pt_features & NETMAP_PT_FULL) ? "full" :
-				(adapter->netmap_pt_features & NETMAP_PT_BASE) ? "base" :
+				(adapter->netmap_pt_features & NET_PTN_FEATURES_FULL) ? "full" :
+				(adapter->netmap_pt_features & NET_PTN_FEATURES_BASE) ? "base" :
 				"none");
 #endif /* CONFIG_E1000_NETMAP_PT */
 
