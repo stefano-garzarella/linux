@@ -215,6 +215,12 @@ static void e1000_shutdown(struct pci_dev *pdev);
 static void e1000_netpoll (struct net_device *netdev);
 #endif
 
+#ifdef CONFIG_E1000_NETMAP_PT
+#define ptnetmap_enabled(adapter) (adapter->ptnetmap_enabled)
+#else /* !CONFIG_E1000_NETMAP_PT */
+#define ptnetmap_enabled(adapter) 0
+#endif /* CONFIG_E1000_NETMAP_PT */
+
 #define COPYBREAK_DEFAULT 256
 static unsigned int copybreak __read_mostly = COPYBREAK_DEFAULT;
 module_param(copybreak, uint, 0644);
@@ -491,22 +497,10 @@ static void e1000_configure(struct e1000_adapter *adapter)
 
 static int e1000_alloc_csb(struct e1000_adapter * adapter)
 {
-	struct e1000_hw *hw = &adapter->hw;
 	struct net_device *netdev = adapter->netdev;
 
 	if (paravirtual && adapter->pdev->subsystem_device == E1000_PARAVIRT_SUBDEV) {
 		pr_info("%s supports paravirtualization\n", netdev->name);
-
-#ifdef CONFIG_E1000_NETMAP_PT
-		/* tell the device the features we support */
-		ew32(PTFEAT, NET_PTN_FEATURES_BASE | NET_PTN_FEATURES_FULL); /* we are cheating for now */
-		/* get back the acknowledged features */
-		adapter->netmap_pt_features = er32(PTFEAT);
-		pr_info("%s netmap passthrough: %s\n", netdev->name,
-				(adapter->netmap_pt_features & NET_PTN_FEATURES_FULL) ? "full" :
-				(adapter->netmap_pt_features & NET_PTN_FEATURES_BASE) ? "base" :
-				"none");
-#endif /* CONFIG_E1000_NETMAP_PT */
 
 		if (adapter->csb)
 			return 0;
@@ -4075,7 +4069,7 @@ static irqreturn_t e1000_msix_intr_data(int irq, void *data)
 
         IFRATE(adapter->rate_ctx.new.msix_intr++);
 
-	if (adapter->csb_mode && !adapter->passthrough) {
+	if (adapter->csb_mode && !ptnetmap_enabled(adapter)) {
 	    /* Wakes the TX queue so that the start_xmit() method can
 	       clean used TX descriptors and continue transmitting. */
 	    adapter->csb->guest_need_txkick = 0;
@@ -4088,7 +4082,7 @@ static irqreturn_t e1000_msix_intr_data(int irq, void *data)
 	}
 
 	if (likely(napi_schedule_prep(&adapter->napi))) {
-		if (adapter->csb_mode && !adapter->passthrough)
+		if (adapter->csb_mode && !ptnetmap_enabled(adapter))
 			adapter->csb->guest_need_rxkick = 0;
 		adapter->total_tx_bytes = 0;
 		adapter->total_tx_packets = 0;
@@ -4147,16 +4141,16 @@ static int e1000_clean(struct napi_struct *napi, int budget)
 
         IFRATE(adapter->rate_ctx.new.clean++);
 
-	if (!adapter->csb_mode || adapter->passthrough)
+	if (!adapter->csb_mode || ptnetmap_enabled(adapter))
 		tx_clean_complete = e1000_clean_tx_irq(adapter, &adapter->tx_ring[0]);
 
 	adapter->clean_rx(adapter, &adapter->rx_ring[0], &work_done, budget);
-	
-	if (adapter->passthrough) {
+#ifdef CONFIG_E1000_NETMAP_PT
+	if (ptnetmap_enabled(adapter)) {
 	    napi_complete(napi);
 	    return work_done;
 	}
-
+#endif /* CONFIG_E1000_NETMAP_PT */
 	if (!adapter->csb_mode && !tx_clean_complete)
 		work_done = budget;
 

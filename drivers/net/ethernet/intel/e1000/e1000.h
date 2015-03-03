@@ -82,7 +82,7 @@ struct e1000_adapter;
 #include "e1000_hw.h"
 
 #ifdef CONFIG_E1000_NETMAP_PT
-#define RATE  /* Enables communication statistics. */
+//#define RATE  /* Enables communication statistics. */
 #ifdef RATE
 #define IFRATE(x) x
 struct rate_stats {
@@ -361,10 +361,9 @@ struct e1000_adapter {
         int msix_enabled;
 
 #ifdef CONFIG_E1000_NETMAP_PT
-	uint32_t netmap_pt_features;
-	int passthrough;
+	int ptnetmap_enabled;
         IFRATE(struct rate_context rate_ctx);
-#endif
+#endif /* CONFIG_E1000_NETMAP_PT */
 
 };
 
