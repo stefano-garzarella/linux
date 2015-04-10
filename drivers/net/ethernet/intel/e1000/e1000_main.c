@@ -467,34 +467,6 @@ static void e1000_release_manageability(struct e1000_adapter *adapter)
 	}
 }
 
-/**
- * e1000_configure - configure the hardware for RX and TX
- * @adapter = private board structure
- **/
-static void e1000_configure(struct e1000_adapter *adapter)
-{
-	struct net_device *netdev = adapter->netdev;
-	int i;
-
-	e1000_set_rx_mode(netdev);
-
-	e1000_restore_vlan(adapter);
-	e1000_init_manageability(adapter);
-
-	e1000_configure_tx(adapter);
-	e1000_setup_rctl(adapter);
-	e1000_configure_rx(adapter);
-	/* call E1000_DESC_UNUSED which always leaves
-	 * at least 1 descriptor unused to make sure
-	 * next_to_use != next_to_clean
-	 */
-	for (i = 0; i < adapter->num_rx_queues; i++) {
-		struct e1000_rx_ring *ring = &adapter->rx_ring[i];
-		adapter->alloc_rx_buf(adapter, ring,
-				      E1000_DESC_UNUSED(ring));
-	}
-}
-
 static int e1000_alloc_csb(struct e1000_adapter * adapter)
 {
 	struct net_device *netdev = adapter->netdev;
@@ -520,7 +492,7 @@ static int e1000_alloc_csb(struct e1000_adapter * adapter)
 	return 0;
 }
 
-static int e1000_configure_csb(struct e1000_adapter * adapter)
+static void e1000_configure_csb(struct e1000_adapter * adapter)
 {
 	struct e1000_hw *hw = &adapter->hw;
 	struct net_device *netdev = adapter->netdev;
@@ -580,8 +552,6 @@ static int e1000_configure_csb(struct e1000_adapter * adapter)
 	    adapter->csb_mode = 0;
             adapter->msix_enabled = 0;
 	}
-
-	return 0;
 }
 
 static void e1000_disable_csb(struct e1000_adapter *adapter)
@@ -611,15 +581,41 @@ static void e1000_free_csb(struct e1000_adapter *adapter)
 	}
 }
 
+/**
+ * e1000_configure - configure the hardware for RX and TX
+ * @adapter = private board structure
+ **/
+static void e1000_configure(struct e1000_adapter *adapter)
+{
+	struct net_device *netdev = adapter->netdev;
+	int i;
+
+	e1000_set_rx_mode(netdev);
+
+	e1000_restore_vlan(adapter);
+	e1000_init_manageability(adapter);
+
+	e1000_configure_tx(adapter);
+	e1000_setup_rctl(adapter);
+	e1000_configure_rx(adapter);
+	e1000_configure_csb(adapter);
+	/* call E1000_DESC_UNUSED which always leaves
+	 * at least 1 descriptor unused to make sure
+	 * next_to_use != next_to_clean
+	 */
+	for (i = 0; i < adapter->num_rx_queues; i++) {
+		struct e1000_rx_ring *ring = &adapter->rx_ring[i];
+		adapter->alloc_rx_buf(adapter, ring,
+				      E1000_DESC_UNUSED(ring));
+	}
+}
+
 int e1000_up(struct e1000_adapter *adapter)
 {
 	struct e1000_hw *hw = &adapter->hw;
 
 	/* hardware has been reset, we need to reload some things */
 	e1000_configure(adapter);
-
-	if (e1000_configure_csb(adapter) < 0)
-	    return -1;
 
 	clear_bit(__E1000_DOWN, &adapter->flags);
 
@@ -1634,9 +1630,6 @@ static int e1000_open(struct net_device *netdev)
 	 */
 	e1000_configure(adapter);
 
-	if (e1000_configure_csb(adapter) < 0)
-	    goto err_config_csb;
-
         err = e1000_request_irq(adapter);
         if (err)
             goto err_req_irq;
@@ -1658,7 +1651,6 @@ static int e1000_open(struct net_device *netdev)
 err_req_irq:
 	e1000_power_down_phy(adapter);
         e1000_disable_csb(adapter);
-err_config_csb:
 	e1000_free_all_rx_resources(adapter);
 err_setup_rx:
 	e1000_free_all_tx_resources(adapter);
