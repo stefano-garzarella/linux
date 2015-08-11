@@ -108,12 +108,14 @@
 #if !defined(NETMAP_VIRT_CSB) /*&& !defined(NET_PARAVIRT_CSB_SIZE) XXX: NET_PARAVIRT_CSB_SIZE to avoid oldest CSB */
 #define NETMAP_VIRT_CSB
 
+/* ptnetmap ring fields shared between guest and host */
 struct pt_ring {
-    uint32_t head;
-    uint32_t cur;
-    uint32_t hwcur;
-    uint32_t hwtail;
-    uint32_t sync_flags;
+    /* XXX revise the layout to minimize cache bounces. */
+    uint32_t head;		/* GW+ HR+ the head of the guest netmap_ring */
+    uint32_t cur;		/* GW+ HR+ the cur of the guest netmap_ring */
+    uint32_t hwcur;		/* GR+ HW+ the hwcur of the host netmap_kring */
+    uint32_t hwtail;		/* GR+ HW+ the hwtail of the host netmap_kring */
+    uint32_t sync_flags;	/* GW+ HR+ the flags of the guest [tx|rx]sync() */
 };
 
 struct paravirt_csb {
@@ -144,25 +146,38 @@ struct paravirt_csb {
     uint32_t vnet_ring_high;	/* Vnet ring physical address high. */
     uint32_t vnet_ring_low;	/* Vnet ring physical address low. */
 
-    /* passthrough */
+    /* ptnetmap configuration fields */
     uint32_t nifp_offset;          /* offset of the netmap_if in the shared memory */
     /* uint16_t host_mem_id; */
-    uint16_t num_tx_rings;
-    uint16_t num_rx_rings;
-    uint16_t num_tx_slots;
-    uint16_t num_rx_slots;
+    uint16_t num_tx_rings;         /* number of TX rings in the ptnetmap host port */
+    uint16_t num_rx_rings;         /* number of RX rings in the ptnetmap host port */
+    uint16_t num_tx_slots;         /* number of slots in the TX ring */
+    uint16_t num_rx_slots;         /* number of slots in the RX ring */
 
-    struct pt_ring tx_ring;
-    struct pt_ring rx_ring;
+    /* ptnetmap ring fields */
+    struct pt_ring tx_ring;       /* TX ring fields shared between guest and host */
+    struct pt_ring rx_ring;       /* RX ring fields shared between guest and host */
 };
 
 #define NET_PARAVIRT_CSB_SIZE   4096
 #define NET_PARAVIRT_NONE   (~((uint32_t)0))
 
-#define NET_PTN_FEATURES_BASE            1
-#define NET_PTN_FEATURES_FULL            2
+#ifdef	QEMU_PCI_H
 
-/* passthrough commands */
+/*
+ * API functions only available within QEMU
+ */
+
+void paravirt_configure_csb(struct paravirt_csb** csb, uint32_t csbbal,
+			uint32_t csbbah, QEMUBH* tx_bh, AddressSpace *as);
+
+#endif /* QEMU_PCI_H */
+
+/* ptnetmap features */
+#define NET_PTN_FEATURES_BASE            1
+#define NET_PTN_FEATURES_FULL            2 /* not used */
+
+/* ptnetmap commands */
 #define NET_PARAVIRT_PTCTL_CONFIG	1
 #define NET_PARAVIRT_PTCTL_FINALIZE	2
 #define NET_PARAVIRT_PTCTL_IFNEW	3
@@ -177,49 +192,20 @@ struct paravirt_csb {
 #define NET_PARAVIRT_PTCTL_HOSTMEMID	12
 
 /*
- * Structures used for ptnetmap configuration
- */
-struct ptnetmap_cfg_ring {
-	uint32_t ioeventfd;
-	uint32_t irqfd;
-};
-
-/*
- * struct ptnetmap_cfg overlaps struct nmreq
- * from nr_offset field, but nr_cmd is required in netmap_ioctl()
- * For this reason this condition must be true:
- * offsetof(struct ptnetmap_cfg, nr_cmd) ==
- * (offsetof(struct nmreq, nr_cmd) - offsetof(struct nmreq , nr_offset))
- */
-struct ptnetmap_cfg {
-        uint32_t features;
-#define PTNETMAP_CFG_FEAT_CSB           0x0001
-#define PTNETMAP_CFG_FEAT_EVENTFD       0x0002
-	struct ptnetmap_cfg_ring tx_ring;
-	struct ptnetmap_cfg_ring rx_ring;
-	uint8_t pad[2];                 /* padding to overlap strct nmreq */
-	uint16_t nr_cmd;                /* needed in netmap_ioctl() */
-        void *csb;   /* CSB */
-};
-
-#ifdef	QEMU_PCI_H
-
-/*
- * API functions only available within QEMU
+ * ptnetmap register of the device used for notification (virtio/e1000)
+ *
+ * ptnetmap e1000 register is defined in if_lem.h (FreeBSD)
+ * and e1000_hw.h (linux)
  */
 
-void paravirt_configure_csb(struct paravirt_csb** csb, uint32_t csbbal,
-			uint32_t csbbah, QEMUBH* tx_bh, AddressSpace *as);
-
-#endif /* QEMU_PCI_H */
 
 /* ptnetmap virtio register */
 /* 32 bit r/w */
-#define PTNETMAP_VIRTIO_IO_PTFEAT       0 /* passthrough features */
+#define PTNETMAP_VIRTIO_IO_PTFEAT       0 /* ptnetmap features */
 /* 32 bit w/o */
-#define PTNETMAP_VIRTIO_IO_PTCTL        4 /* passthrough control */
+#define PTNETMAP_VIRTIO_IO_PTCTL        4 /* ptnetmap control */
 /* 32 bit r/o */
-#define PTNETMAP_VIRTIO_IO_PTSTS        8 /* passthrough status */
+#define PTNETMAP_VIRTIO_IO_PTSTS        8 /* ptnetmap status */
 /* 32 bit w/o */
 #define PTNETMAP_VIRTIO_IO_CSBBAH       12 /* CSB Base Address High */
 /* 32 bit w/o */
@@ -233,34 +219,69 @@ void paravirt_configure_csb(struct paravirt_csb** csb, uint32_t csbbal,
 #if defined(NETMAP_API) && !defined(NETMAP_VIRT_PTNETMAP)
 #define NETMAP_VIRT_PTNETMAP
 
-#ifndef CTASSERT
-#ifndef BUILD_BUG_ON_ZERO
-#define BUILD_BUG_ON_ZERO(e) (sizeof(struct { int:-!!(e); }))
-#endif /* BUILD_BUG_ON_ZERO */
-#define CTASSERT(e) ((void)BUILD_BUG_ON_ZERO(!(e)))
-#endif /* CTASSERT */
+/*
+ * ptnetmap_memdev: device used to expose memory into the guest VM
+ *
+ * macros used in the hypervisor frontend (QEMU, bhyve) and in the
+ * guest device driver
+ */
+
+/* ptnetmap memdev PCI-ID and PCI-BARS */
+#define PTN_MEMDEV_NAME                 "ptnetmap-memdev"
+#define PTNETMAP_PCI_VENDOR_ID          0x3333  /* XXX-ste: change vendor_id */
+#define PTNETMAP_PCI_DEVICE_ID          0x0001
+#define PTNETMAP_IO_PCI_BAR             0
+#define PTNETMAP_MEM_PCI_BAR            1
+
+/* ptnetmap memdev register */
+/* 32 bit r/o */
+#define PTNETMAP_IO_PCI_FEATURES        0	/* ptnetmap_memdev features */
+/* 32 bit r/o */
+#define PTNETMAP_IO_PCI_MEMSIZE         4	/* size of the netmap memory shared
+						 * between guest and host
+						 */
+/* 16 bit r/o */
+#define PTNETMAP_IO_PCI_HOSTID          8	/* memory allocator ID in netmap host */
+#define PTNEMTAP_IO_SIZE                10
 
 /*
- * Functions used to read/write ptnetmap_cfg in the nmreq,
- * between the fields nm_offset and nr_cmd.
+ * ptnetmap configuration
+ * the hypervisor (QEMU or bhyve) sent this struct to the netmap.ko
+ * through IOCTL when it wants to start the ptnetmap kthreads
+ */
+struct ptnetmap_cfg {
+        uint32_t features;
+#define PTNETMAP_CFG_FEAT_CSB           0x0001
+#define PTNETMAP_CFG_FEAT_EVENTFD       0x0002
+#define PTNETMAP_CFG_FEAT_IOCTL		0x0004
+	struct nm_kth_event_cfg tx_ring;	/* TX eventfds/ioctl */
+	struct nm_kth_event_cfg rx_ring;	/* RX eventfds/ioctl */
+        void *csb;				/* CSB */
+};
+/*
+ * Functions used to read/write ptnetmap_cfg in the nmreq.
+ * The user-space application writes the pointer of ptnetmap_cfg
+ * (user-space buffer) starting from nr_arg1 field, the kernel
+ * use copyin to copy it in the kernel-space.
  */
 static inline void
 ptnetmap_write_cfg(struct nmreq *nmr, struct ptnetmap_cfg *cfg)
 {
-#ifdef CTASSERT
-CTASSERT(offsetof(struct ptnetmap_cfg, nr_cmd) == (offsetof(struct nmreq, nr_cmd) - offsetof(struct nmreq , nr_offset)));
-CTASSERT(sizeof(struct ptnetmap_cfg) <= sizeof(struct nmreq) - offsetof(struct nmreq , nr_offset));
-#endif
-    memcpy(&nmr->nr_offset, cfg, sizeof(*cfg));
+    uintptr_t *nmr_ptncfg = (uintptr_t *)&nmr->nr_arg1;
+    *nmr_ptncfg = (uintptr_t)cfg;
 }
-
-static inline void
+#if defined (WITH_PTNETMAP_HOST)
+static inline int
 ptnetmap_read_cfg(struct nmreq *nmr, struct ptnetmap_cfg *cfg)
 {
-    memcpy(cfg, &nmr->nr_offset, sizeof(*cfg));
+    uintptr_t *nmr_ptncfg = (uintptr_t *)&nmr->nr_arg1;
+    return copyin((const void *)*nmr_ptncfg, cfg, sizeof(*cfg));
 }
+#endif /* WITH_PTNETMAP_HOST */
 
 #if defined (WITH_PTNETMAP_HOST) || defined (WITH_PTNETMAP_GUEST)
+
+/* return l_elem - r_elem with wraparound */
 static inline uint32_t
 ptn_sub(uint32_t l_elem, uint32_t r_elem, uint32_t num_slots)
 {
@@ -273,23 +294,10 @@ ptn_sub(uint32_t l_elem, uint32_t r_elem, uint32_t num_slots)
 #endif /* WITH_PTNETMAP_HOST || WITH_PTNETMAP_GUEST */
 
 #ifdef WITH_PTNETMAP_HOST
-/* ptnetmap kernel thread routines */
+/*
+ * ptnetmap kernel thread routines
+ * */
 enum ptn_kthread_t { PTK_RX = 0, PTK_TX = 1 }; /* kthread type */
-struct ptn_kthread; /* ptnetmap kthread - opaque */
-typedef void (*ptn_kthread_worker_fn_t)(void *data);
-/* ptnetmap kthread configuration */
-struct ptn_kthread_cfg {
-    enum ptn_kthread_t type;            /* kthread TX or RX */
-    struct ptnetmap_cfg_ring ring;      /* ring event fd */
-    ptn_kthread_worker_fn_t worker_fn;  /* worker function */
-    void *worker_private;               /* worker parameter */
-};
-struct ptn_kthread *ptn_kthread_create(struct ptn_kthread_cfg *);
-int ptn_kthread_start(struct ptn_kthread *);
-void ptn_kthread_stop(struct ptn_kthread *);
-void ptn_kthread_delete(struct ptn_kthread *);
-void ptn_kthread_wakeup_worker(struct ptn_kthread *ptk);
-void ptn_kthread_send_irq(struct ptn_kthread *);
 
 /* Functions to read and write CSB fields in the host */
 #if defined (linux)
@@ -306,10 +314,10 @@ void ptn_kthread_send_irq(struct ptn_kthread *);
 
 /* Host: Read kring pointers (head, cur, sync_flags) from CSB */
 static inline void
-ptnetmap_host_read_kring_csb(struct pt_ring __user *ptr, uint32_t *g_head,
-        uint32_t *g_cur, uint32_t *g_flags, uint32_t num_slots)
+ptnetmap_host_read_kring_csb(struct pt_ring __user *ptr, struct netmap_ring *g_ring,
+        uint32_t num_slots)
 {
-    uint32_t old_head = *g_head, old_cur = *g_cur;
+    uint32_t old_head = g_ring->head, old_cur = g_ring->cur;
     uint32_t d, inc_h, inc_c;
 
     //mb(); /* Force memory complete before read CSB */
@@ -330,22 +338,22 @@ ptnetmap_host_read_kring_csb(struct pt_ring __user *ptr, uint32_t *g_head,
      * This approach ensures that every head that we read is
      * associated with the correct cur. In this way head can not exceed cur.
      */
-    CSB_READ(ptr, head, *g_head);
+    CSB_READ(ptr, head, g_ring->head);
     mb();
-    CSB_READ(ptr, cur, *g_cur);
-    CSB_READ(ptr, sync_flags, *g_flags);
+    CSB_READ(ptr, cur, g_ring->cur);
+    CSB_READ(ptr, sync_flags, g_ring->flags);
     /*
      * The previous barrier does not avoid to read an update cur and an old
      * head. For this reason, we have to check that the new cur not overtaking head.
      */
     d = ptn_sub(old_cur, old_head, num_slots);     /* previous distance */
-    inc_c = ptn_sub(*g_cur, old_cur, num_slots);   /* increase of cur */
-    inc_h = ptn_sub(*g_head, old_head, num_slots); /* increase of head */
+    inc_c = ptn_sub(g_ring->cur, old_cur, num_slots);   /* increase of cur */
+    inc_h = ptn_sub(g_ring->head, old_head, num_slots); /* increase of head */
 
     if (unlikely(inc_c > num_slots - d + inc_h)) { /* cur overtakes head */
         ND(1,"ERROR cur overtakes head - old_cur: %u cur: %u old_head: %u head: %u",
-                old_cur, *g_cur, old_head, *g_head);
-        *g_cur = nm_prev(*g_head, num_slots - 1);
+                old_cur, g_ring->cur, old_head, g_ring->head);
+        g_ring->cur = nm_prev(g_ring->head, num_slots - 1);
         //*g_cur = *g_head;
     }
 }
@@ -430,29 +438,12 @@ ptnetmap_guest_read_kring_csb(struct pt_ring *ptr, uint32_t *h_hwcur,
     }
 }
 
-/* ptnetmap memdev routines */
+/* ptnetmap_memdev routines used to talk with ptnetmap_memdev device driver */
 struct ptnetmap_memdev;
-int netmap_pt_memdev_init(void);
-void netmap_pt_memdev_uninit(void);
-int netmap_pt_memdev_iomap(struct ptnetmap_memdev *, vm_paddr_t *, void **);
-void netmap_pt_memdev_iounmap(struct ptnetmap_memdev *);
-
-
-/* ptnetmap memdev PCI-ID and PCI-BARS */
-#define PTN_MEMDEV_NAME                 "ptnetmap-memdev"
-#define PTNETMAP_PCI_VENDOR_ID          0x3333  /* XXX-ste: set vendor_id */
-#define PTNETMAP_PCI_DEVICE_ID          0x0001
-#define PTNETMAP_IO_PCI_BAR             0
-#define PTNETMAP_MEM_PCI_BAR            1
-
-/* ptnetmap memdev register */
-/* 32 bit r/o */
-#define PTNETMAP_IO_PCI_FEATURES        0
-/* 32 bit r/o */
-#define PTNETMAP_IO_PCI_MEMSIZE         4
-/* 16 bit r/o */
-#define PTNETMAP_IO_PCI_HOSTID          8
-#define PTNEMTAP_IO_SIZE                10
+int nm_os_pt_memdev_init(void);
+void nm_os_pt_memdev_uninit(void);
+int nm_os_pt_memdev_iomap(struct ptnetmap_memdev *, vm_paddr_t *, void **);
+void nm_os_pt_memdev_iounmap(struct ptnetmap_memdev *);
 #endif /* WITH_PTNETMAP_GUEST */
 
 #endif /* NETMAP_VIRT_PTNETMAP */
