@@ -9,6 +9,7 @@
 
 #include <errno.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <signal.h>
 #include <unistd.h>
@@ -147,6 +148,126 @@ int vsock_stream_accept(unsigned int cid, unsigned int port,
 	if (clientaddrp)
 		*clientaddrp = clientaddr.svm;
 	return client_fd;
+}
+
+/* Transmit one byte and check the return value.
+ *
+ * expected_ret:
+ *  <0 Negative errno (for testing errors)
+ *   0 End-of-file
+ *   1 Success
+ *
+ * skip_exit:
+ *  false On error, print the error message and exit with EXIT_FAILURE value
+ *  true  On error, print the error message and continue
+ */
+void send_byte(int fd, int expected_ret, bool skip_exit)
+{
+	const uint8_t byte = 'A';
+	ssize_t nwritten;
+
+	timeout_begin(TIMEOUT);
+	do {
+		nwritten = write(fd, &byte, sizeof(byte));
+		timeout_check("write");
+	} while (nwritten < 0 && errno == EINTR);
+	timeout_end();
+
+	if (expected_ret < 0) {
+		if (nwritten != -1) {
+			fprintf(stderr, "bogus write(2) return value %zd\n",
+				nwritten);
+			goto error;
+		}
+		if (errno != -expected_ret) {
+			perror("write");
+			goto error;
+		}
+		return;
+	}
+
+	if (nwritten < 0) {
+		perror("write");
+		goto error;
+	}
+	if (nwritten == 0) {
+		if (expected_ret == 0)
+			return;
+
+		fprintf(stderr, "unexpected EOF while sending byte\n");
+		goto error;
+	}
+	if (nwritten != sizeof(byte)) {
+		fprintf(stderr, "bogus write(2) return value %zd\n", nwritten);
+		goto error;
+	}
+
+	return;
+error:
+	if (!skip_exit) {
+		exit(EXIT_FAILURE);
+	}
+	fprintf(stderr, "... previous error SKIPPED!\n");
+}
+
+/* Receive one byte and check the return value.
+ *
+ * expected_ret:
+ *  <0 Negative errno (for testing errors)
+ *   0 End-of-file
+ *   1 Success
+ *
+ * skip_exit:
+ *  false On error, print the error message and exit with EXIT_FAILURE value
+ *  true  On error, print the error message and continue
+ */
+void recv_byte(int fd, int expected_ret, bool skip_exit)
+{
+	uint8_t byte;
+	ssize_t nread;
+
+	timeout_begin(TIMEOUT);
+	do {
+		nread = read(fd, &byte, sizeof(byte));
+		timeout_check("read");
+	} while (nread < 0 && errno == EINTR);
+	timeout_end();
+
+	if (expected_ret < 0) {
+		if (nread != -1) {
+			fprintf(stderr, "bogus read(2) return value %zd\n",
+				nread);
+			goto error;
+		}
+		if (errno != -expected_ret) {
+			perror("read");
+			goto error;
+		}
+		return;
+	}
+
+	if (nread < 0) {
+		perror("read");
+		goto error;
+	}
+	if (nread == 0) {
+		if (expected_ret == 0)
+			return;
+
+		fprintf(stderr, "unexpected EOF while receiving byte\n");
+		goto error;
+	}
+	if (nread != sizeof(byte)) {
+		fprintf(stderr, "bogus read(2) return value %zd\n", nread);
+		goto error;
+	}
+
+	return;
+error:
+	if (!skip_exit) {
+		exit(EXIT_FAILURE);
+	}
+	fprintf(stderr, "... previous error SKIPPED!\n");
 }
 
 /* Run test cases.  The program terminates if a failure occurs. */
