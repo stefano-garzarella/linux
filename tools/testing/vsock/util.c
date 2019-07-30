@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <signal.h>
 #include <unistd.h>
+#include <assert.h>
 
 #include "timeout.h"
 #include "control.h"
@@ -42,6 +43,22 @@ unsigned int parse_cid(const char *str)
 		exit(EXIT_FAILURE);
 	}
 	return n;
+}
+
+/* Get the local CID */
+unsigned int vsock_get_local_cid(int fd)
+{
+	struct sockaddr_vm svm;
+	socklen_t svm_len = sizeof(svm);
+
+	if (getsockname(fd, (struct sockaddr *) &svm, &svm_len)) {
+		perror("getsockname");
+		exit(EXIT_FAILURE);
+	}
+
+	assert(svm.svm_family == AF_VSOCK);
+
+	return svm.svm_cid;
 }
 
 /* Connect to <cid, port> and return the file descriptor. */
