@@ -474,6 +474,7 @@ static void vhost_vsock_handle_tx_kick(struct vhost_work *work)
 			continue;
 		}
 
+		pkt->net = vsock_default_net();
 		len = pkt->len;
 
 		/* Deliver to monitoring devices all received packets */
