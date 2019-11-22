@@ -82,6 +82,11 @@ out_rcu:
 	return ret;
 }
 
+static bool virtio_transport_net_allow(struct vsock_sock *vsk)
+{
+	return true;
+}
+
 static void
 virtio_transport_send_pkt_work(struct work_struct *work)
 {
@@ -448,6 +453,7 @@ static struct virtio_transport virtio_transport = {
 		.module                   = THIS_MODULE,
 
 		.get_local_cid            = virtio_transport_get_local_cid,
+		.net_allow                = virtio_transport_net_allow,
 
 		.init                     = virtio_transport_do_socket_init,
 		.destruct                 = virtio_transport_destruct,

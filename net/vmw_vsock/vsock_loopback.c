@@ -27,6 +27,11 @@ static u32 vsock_loopback_get_local_cid(void)
 	return VMADDR_CID_LOCAL;
 }
 
+static bool vsock_loopback_net_allow(struct vsock_sock *vsk)
+{
+	return NULL;
+}
+
 static int vsock_loopback_send_pkt(struct virtio_vsock_pkt *pkt)
 {
 	struct vsock_loopback *vsock = &the_vsock_loopback;
@@ -68,6 +73,7 @@ static struct virtio_transport loopback_transport = {
 		.module                   = THIS_MODULE,
 
 		.get_local_cid            = vsock_loopback_get_local_cid,
+		.net_allow                = vsock_loopback_net_allow,
 
 		.init                     = virtio_transport_do_socket_init,
 		.destruct                 = virtio_transport_destruct,

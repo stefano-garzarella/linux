@@ -304,7 +304,7 @@ static void hvs_open_connection(struct vmbus_channel *chan)
 		return;
 
 	hvs_addr_init(&addr, conn_from_host ? if_type : if_instance);
-	sk = vsock_find_bound_socket(&addr);
+	sk = vsock_find_bound_socket(&addr, NULL);
 	if (!sk)
 		return;
 
@@ -426,6 +426,11 @@ out:
 static u32 hvs_get_local_cid(void)
 {
 	return VMADDR_CID_ANY;
+}
+
+static bool hvs_net_allow(struct vsock_sock *vsk)
+{
+	return true;
 }
 
 static int hvs_sock_init(struct vsock_sock *vsk, struct vsock_sock *psk)
@@ -804,6 +809,7 @@ static struct vsock_transport hvs_transport = {
 	.module                   = THIS_MODULE,
 
 	.get_local_cid            = hvs_get_local_cid,
+	.net_allow                = hvs_net_allow,
 
 	.init                     = hvs_sock_init,
 	.destruct                 = hvs_destruct,
