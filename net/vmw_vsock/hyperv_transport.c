@@ -201,7 +201,8 @@ static void hvs_remote_addr_init(struct sockaddr_vm *remote,
 
 		remote->svm_port = host_ephemeral_port++;
 
-		sk = vsock_find_connected_socket(remote, local);
+		sk = vsock_find_connected_socket(remote, local,
+						 vsock_default_net());
 		if (!sk) {
 			/* Found an available ephemeral port */
 			return;
@@ -350,7 +351,7 @@ static void hvs_open_connection(struct vmbus_channel *chan)
 		return;
 
 	hvs_addr_init(&addr, conn_from_host ? if_type : if_instance);
-	sk = vsock_find_bound_socket(&addr);
+	sk = vsock_find_bound_socket(&addr, vsock_default_net());
 	if (!sk)
 		return;
 
