@@ -71,6 +71,7 @@ static void test_stream_client_close_client(const struct test_opts *opts)
 
 static void test_stream_client_close_server(const struct test_opts *opts)
 {
+	unsigned int local_cid;
 	int fd;
 
 	fd = vsock_stream_accept(VMADDR_CID_ANY, 1234, NULL);
@@ -79,16 +80,24 @@ static void test_stream_client_close_server(const struct test_opts *opts)
 		exit(EXIT_FAILURE);
 	}
 
+	local_cid = vsock_get_local_cid(fd);
+
 	control_expectln("CLOSED");
 
 	send_byte(fd, -EPIPE, false);
-	recv_byte(fd, 1, false);
+	/* If we are on the host side, some transports (e.g. VMCI) don't
+	 * support half-closed sockets, because when the guest closes a
+	 * connection, all data is gone and EOF is returned.
+	 * In this case, we print an error, but we skip the exit failure.
+	 */
+	recv_byte(fd, 1, local_cid == VMADDR_CID_HOST);
 	recv_byte(fd, 0, false);
 	close(fd);
 }
 
 static void test_stream_server_close_client(const struct test_opts *opts)
 {
+	unsigned int local_cid;
 	int fd;
 
 	fd = vsock_stream_connect(opts->peer_cid, 1234);
@@ -97,10 +106,17 @@ static void test_stream_server_close_client(const struct test_opts *opts)
 		exit(EXIT_FAILURE);
 	}
 
+	local_cid = vsock_get_local_cid(fd);
+
 	control_expectln("CLOSED");
 
 	send_byte(fd, -EPIPE, false);
-	recv_byte(fd, 1, false);
+	/* If we are on the host side, some transports (e.g. VMCI) don't
+	 * support half-closed sockets, because when the guest closes a
+	 * connection, all data is gone and EOF is returned.
+	 * In this case, we print an error, but we skip the exit failure.
+	 */
+	recv_byte(fd, 1, local_cid == VMADDR_CID_HOST);
 	recv_byte(fd, 0, false);
 	close(fd);
 }
