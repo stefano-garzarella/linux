@@ -28,6 +28,7 @@ static DEFINE_MUTEX(the_virtio_vsock_mutex); /* protects the_virtio_vsock */
 struct virtio_vsock {
 	struct virtio_device *vdev;
 	struct virtqueue *vqs[VSOCK_VQ_MAX];
+	struct net *net;
 
 	/* Virtqueue processing is deferred to a workqueue */
 	struct work_struct tx_work;
@@ -532,6 +533,7 @@ static void virtio_transport_rx_work(struct work_struct *work)
 				continue;
 			}
 
+			pkt->net = vsock->net;
 			pkt->len = len - sizeof(pkt->hdr);
 
 			virtio_transport_deliver_tap_pkt(pkt);
@@ -578,6 +580,7 @@ static int virtio_vsock_probe(struct virtio_device *vdev)
 	}
 
 	vsock->vdev = vdev;
+	vsock->net = vsock_g2h_net();
 
 	ret = virtio_find_vqs(vsock->vdev, VSOCK_VQ_MAX,
 			      vsock->vqs, callbacks, names,
