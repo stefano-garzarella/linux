@@ -140,6 +140,8 @@ static const struct vsock_transport *transport_dgram;
 static const struct vsock_transport *transport_local;
 static DEFINE_MUTEX(vsock_register_mutex);
 
+static struct net *g2h_net = &init_net;
+
 /**** UTILS ****/
 
 /* Each bound VSocket is stored in the bind hash table and each connected
@@ -511,7 +513,7 @@ EXPORT_SYMBOL_GPL(vsock_net_eq);
 
 struct net *vsock_g2h_net(void)
 {
-	return &init_net;
+	return g2h_net;
 }
 EXPORT_SYMBOL_GPL(vsock_g2h_net);
 
@@ -2081,6 +2083,7 @@ static long vsock_dev_do_ioctl(struct file *filp,
 	u32 __user *p = ptr;
 	u32 cid = VMADDR_CID_ANY;
 	struct net *net;
+	int assign_g2h;
 	int retval = 0;
 
 	switch (cmd) {
@@ -2102,6 +2105,30 @@ static long vsock_dev_do_ioctl(struct file *filp,
 			retval = -EFAULT;
 		break;
 
+	case IOCTL_VM_SOCKETS_ASSIGN_G2H_NETNS:
+		if (!capable(CAP_NET_ADMIN)) {
+			retval = -EACCES;
+			break;
+		}
+
+		if (copy_from_user(&assign_g2h, ptr, sizeof(assign_g2h))) {
+			retval = -EFAULT;
+			break;
+		}
+
+		if (!assign_g2h) {
+			net = NULL;
+		} else {
+			net = get_net_ns_by_pid(current->pid);
+			if (IS_ERR(net)) {
+				retval = PTR_ERR(net);
+				break;
+			}
+		}
+
+		g2h_net = net;
+
+		break;
 	default:
 		pr_err("Unknown ioctl %d\n", cmd);
 		retval = -EINVAL;

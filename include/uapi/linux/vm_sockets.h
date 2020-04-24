@@ -156,4 +156,6 @@ struct sockaddr_vm {
 
 #define IOCTL_VM_SOCKETS_GET_LOCAL_CID		_IO(7, 0xb9)
 
+#define IOCTL_VM_SOCKETS_ASSIGN_G2H_NETNS	_IOW(7, 0xbA, int)
+
 #endif /* _UAPI_VM_SOCKETS_H */
