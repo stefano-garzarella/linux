@@ -51,6 +51,41 @@ static struct bus_type vdpa_bus = {
 	.remove = vdpa_dev_remove,
 };
 
+static int vdpa_config_size_wrap(struct vdpa_device *vdev, unsigned int offset,
+				 unsigned int len)
+{
+	const struct vdpa_config_ops *ops = vdev->config;
+	unsigned int config_size = ops->get_config_size(vdev);
+
+	if (offset > config_size || len > config_size)
+		return -1;
+
+	return min(len, config_size - offset);
+}
+
+int vdpa_get_config(struct vdpa_device *vdev, unsigned int offset,
+		    void *buf, unsigned int len)
+{
+	const struct vdpa_config_ops *ops = vdev->config;
+	int bytes_get;
+
+	bytes_get = vdpa_config_size_wrap(vdev, offset, len);
+	if (bytes_get <= 0)
+		return bytes_get;
+
+	/*
+	 * Config accesses aren't supposed to trigger before features are set.
+	 * If it does happen we assume a legacy guest.
+	 */
+	if (!vdev->features_valid)
+		vdpa_set_features(vdev, 0);
+
+	ops->get_config(vdev, offset, buf, bytes_get);
+
+	return bytes_get;
+}
+EXPORT_SYMBOL_GPL(vdpa_get_config);
+
 static void vdpa_release_dev(struct device *d)
 {
 	struct vdpa_device *vdev = dev_to_vdpa(d);
