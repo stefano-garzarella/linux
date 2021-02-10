@@ -86,6 +86,22 @@ int vdpa_get_config(struct vdpa_device *vdev, unsigned int offset,
 }
 EXPORT_SYMBOL_GPL(vdpa_get_config);
 
+int vdpa_set_config(struct vdpa_device *vdev, unsigned int offset,
+		    const void *buf, unsigned int len)
+{
+	const struct vdpa_config_ops *ops = vdev->config;
+	int bytes_set;
+
+	bytes_set = vdpa_config_size_wrap(vdev, offset, len);
+	if (bytes_set <= 0)
+		return bytes_set;
+
+	ops->set_config(vdev, offset, buf, bytes_set);
+
+	return bytes_set;
+}
+EXPORT_SYMBOL_GPL(vdpa_set_config);
+
 static void vdpa_release_dev(struct device *d)
 {
 	struct vdpa_device *vdev = dev_to_vdpa(d);

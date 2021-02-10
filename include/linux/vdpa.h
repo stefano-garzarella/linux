@@ -334,6 +334,8 @@ static inline int vdpa_set_features(struct vdpa_device *vdev, u64 features)
 
 int vdpa_get_config(struct vdpa_device *vdev, unsigned int offset,
 		    void *buf, unsigned int len);
+int vdpa_set_config(struct vdpa_device *vdev, unsigned int offset,
+		    const void *buf, unsigned int len);
 
 /**
  * vdpa_mgmtdev_ops - vdpa device ops
