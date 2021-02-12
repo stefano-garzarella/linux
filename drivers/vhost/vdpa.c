@@ -191,9 +191,6 @@ static ssize_t vhost_vdpa_config_validate(struct vhost_vdpa *v,
 	struct vdpa_device *vdpa = v->vdpa;
 	u32 size = vdpa->config->get_config_size(vdpa);
 
-	if (c->len == 0)
-		return -EINVAL;
-
 	return min(c->len, size);
 }
 
@@ -204,6 +201,7 @@ static long vhost_vdpa_get_config(struct vhost_vdpa *v,
 	struct vhost_vdpa_config config;
 	unsigned long size = offsetof(struct vhost_vdpa_config, buf);
 	ssize_t config_size;
+	long ret;
 	u8 *buf;
 
 	if (copy_from_user(&config, c, size))
@@ -217,15 +215,18 @@ static long vhost_vdpa_get_config(struct vhost_vdpa *v,
 	if (!buf)
 		return -ENOMEM;
 
-	vdpa_get_config(vdpa, config.off, buf, config_size);
-
-	if (copy_to_user(c->buf, buf, config_size)) {
-		kvfree(buf);
-		return -EFAULT;
+	ret = vdpa_get_config(vdpa, config.off, buf, config_size);
+	if (ret < 0) {
+		ret = -EFAULT;
+		goto out;
 	}
 
+	if (copy_to_user(c->buf, buf, config_size))
+		ret = -EFAULT;
+
+out:
 	kvfree(buf);
-	return 0;
+	return ret;
 }
 
 static long vhost_vdpa_set_config(struct vhost_vdpa *v,
@@ -235,6 +236,7 @@ static long vhost_vdpa_set_config(struct vhost_vdpa *v,
 	struct vhost_vdpa_config config;
 	unsigned long size = offsetof(struct vhost_vdpa_config, buf);
 	ssize_t config_size;
+	long ret;
 	u8 *buf;
 
 	if (copy_from_user(&config, c, size))
@@ -248,10 +250,12 @@ static long vhost_vdpa_set_config(struct vhost_vdpa *v,
 	if (IS_ERR(buf))
 		return PTR_ERR(buf);
 
-	vdpa_set_config(vdpa, config.off, buf, config_size);
+	ret = vdpa_set_config(vdpa, config.off, buf, config_size);
+	if (ret < 0)
+		ret = -EFAULT;
 
 	kvfree(buf);
-	return 0;
+	return ret;
 }
 
 static long vhost_vdpa_get_features(struct vhost_vdpa *v, u64 __user *featurep)
