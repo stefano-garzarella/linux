@@ -185,10 +185,10 @@ static long vhost_vdpa_set_status(struct vhost_vdpa *v, u8 __user *statusp)
 	return 0;
 }
 
-static int vhost_vdpa_config_validate(struct vhost_vdpa *v,
-				      struct vhost_vdpa_config *c)
+static ssize_t vhost_vdpa_config_validate(struct vhost_vdpa *v,
+					  struct vhost_vdpa_config *c)
 {
-	long size = 0;
+	u32 size = 0;
 
 	switch (v->virtio_id) {
 	case VIRTIO_ID_NET:
@@ -199,10 +199,7 @@ static int vhost_vdpa_config_validate(struct vhost_vdpa *v,
 	if (c->len == 0)
 		return -EINVAL;
 
-	if (c->len > size - c->off)
-		return -E2BIG;
-
-	return 0;
+	return min(c->len, size);
 }
 
 static long vhost_vdpa_get_config(struct vhost_vdpa *v,
@@ -211,19 +208,23 @@ static long vhost_vdpa_get_config(struct vhost_vdpa *v,
 	struct vdpa_device *vdpa = v->vdpa;
 	struct vhost_vdpa_config config;
 	unsigned long size = offsetof(struct vhost_vdpa_config, buf);
+	ssize_t config_size;
 	u8 *buf;
 
 	if (copy_from_user(&config, c, size))
 		return -EFAULT;
-	if (vhost_vdpa_config_validate(v, &config))
-		return -EINVAL;
-	buf = kvzalloc(config.len, GFP_KERNEL);
+
+	config_size = vhost_vdpa_config_validate(v, &config);
+	if (config_size <= 0)
+		return config_size;
+
+	buf = kvzalloc(config_size, GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;
 
-	vdpa_get_config(vdpa, config.off, buf, config.len);
+	vdpa_get_config(vdpa, config.off, buf, config_size);
 
-	if (copy_to_user(c->buf, buf, config.len)) {
+	if (copy_to_user(c->buf, buf, config_size)) {
 		kvfree(buf);
 		return -EFAULT;
 	}
@@ -238,18 +239,21 @@ static long vhost_vdpa_set_config(struct vhost_vdpa *v,
 	struct vdpa_device *vdpa = v->vdpa;
 	struct vhost_vdpa_config config;
 	unsigned long size = offsetof(struct vhost_vdpa_config, buf);
+	ssize_t config_size;
 	u8 *buf;
 
 	if (copy_from_user(&config, c, size))
 		return -EFAULT;
-	if (vhost_vdpa_config_validate(v, &config))
-		return -EINVAL;
 
-	buf = vmemdup_user(c->buf, config.len);
+	config_size = vhost_vdpa_config_validate(v, &config);
+	if (config_size <= 0)
+		return config_size;
+
+	buf = vmemdup_user(c->buf, config_size);
 	if (IS_ERR(buf))
 		return PTR_ERR(buf);
 
-	vdpa_set_config(vdpa, config.off, buf, config.len);
+	vdpa_set_config(vdpa, config.off, buf, config_size);
 
 	kvfree(buf);
 	return 0;
