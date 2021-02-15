@@ -451,9 +451,6 @@ static void vdpasim_get_config(struct vdpa_device *vdpa, unsigned int offset,
 {
 	struct vdpasim *vdpasim = vdpa_to_sim(vdpa);
 
-	if (offset + len > vdpasim->dev_attr.config_size)
-		return;
-
 	if (vdpasim->dev_attr.get_config)
 		vdpasim->dev_attr.get_config(vdpasim, vdpasim->config);
 
@@ -464,9 +461,6 @@ static void vdpasim_set_config(struct vdpa_device *vdpa, unsigned int offset,
 			     const void *buf, unsigned int len)
 {
 	struct vdpasim *vdpasim = vdpa_to_sim(vdpa);
-
-	if (offset + len > vdpasim->dev_attr.config_size)
-		return;
 
 	memcpy(vdpasim->config + offset, buf, len);
 
