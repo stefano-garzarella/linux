@@ -343,7 +343,6 @@ static void ifcvf_vdpa_get_config(struct vdpa_device *vdpa_dev,
 {
 	struct ifcvf_hw *vf = vdpa_to_vf(vdpa_dev);
 
-	WARN_ON(offset + len > sizeof(struct virtio_net_config));
 	ifcvf_read_net_config(vf, offset, buf, len);
 }
 
@@ -353,7 +352,6 @@ static void ifcvf_vdpa_set_config(struct vdpa_device *vdpa_dev,
 {
 	struct ifcvf_hw *vf = vdpa_to_vf(vdpa_dev);
 
-	WARN_ON(offset + len > sizeof(struct virtio_net_config));
 	ifcvf_write_net_config(vf, offset, buf, len);
 }
 

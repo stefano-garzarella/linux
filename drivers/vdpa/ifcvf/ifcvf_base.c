@@ -222,7 +222,6 @@ void ifcvf_read_net_config(struct ifcvf_hw *hw, u64 offset,
 	u8 old_gen, new_gen, *p;
 	int i;
 
-	WARN_ON(offset + length > sizeof(struct virtio_net_config));
 	do {
 		old_gen = ifc_ioread8(&hw->common_cfg->config_generation);
 		p = dst;
@@ -240,7 +239,7 @@ void ifcvf_write_net_config(struct ifcvf_hw *hw, u64 offset,
 	int i;
 
 	p = src;
-	WARN_ON(offset + length > sizeof(struct virtio_net_config));
+
 	for (i = 0; i < length; i++)
 		ifc_iowrite8(*p++, hw->net_cfg + offset + i);
 }
