@@ -829,7 +829,12 @@ static long vhost_vsock_dev_ioctl(struct file *f, unsigned int ioctl,
 	case VHOST_VSOCK_SET_GUEST_CID:
 		if (copy_from_user(&guest_cid, argp, sizeof(guest_cid)))
 			return -EFAULT;
-		return vhost_vsock_set_cid(vsock, guest_cid);
+		mutex_lock(&vsock->dev.mutex);
+		r = vhost_dev_check_owner(&vsock->dev);
+		if (!r)
+			r = vhost_vsock_set_cid(vsock, guest_cid);
+		mutex_unlock(&vsock->dev.mutex);
+		return r;
 	case VHOST_VSOCK_SET_RUNNING:
 		if (copy_from_user(&start, argp, sizeof(start)))
 			return -EFAULT;
