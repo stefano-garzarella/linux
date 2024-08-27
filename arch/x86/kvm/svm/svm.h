@@ -198,9 +198,39 @@ struct svm_nested_state {
 	bool force_msr_bitmap_recalc;
 };
 
-struct vcpu_sev_es_state {
-	/* SEV-ES support */
+#define vmpl_vmsa(s, v)				((s)->sev_es.vmsa_info[(v)].vmsa)
+#define vmpl_vmsa_gpa(s, v)			((s)->sev_es.vmsa_info[(v)].gpa)
+#define vmpl_vmsa_hpa(s, v)			((s)->sev_es.vmsa_info[(v)].hpa)
+#define vmpl_ap_waiting_for_reset(s, v)		((s)->sev_es.vmsa_info[(v)].ap_waiting_for_reset)
+#define vmpl_has_guest_vmsa(s, v)		((s)->sev_es.vmsa_info[(v)].has_guest_vmsa)
+
+#define cur_vmpl(s)				((s)->sev_es.snp_current_vmpl)
+#define cur_vmpl_vmsa(s)			vmpl_vmsa((s), cur_vmpl(s))
+#define cur_vmpl_vmsa_gpa(s)			vmpl_vmsa_gpa((s), cur_vmpl(s))
+#define cur_vmpl_vmsa_hpa(s)			vmpl_vmsa_hpa((s), cur_vmpl(s))
+#define cur_vmpl_ap_waiting_for_reset(s)	vmpl_ap_waiting_for_reset((s), cur_vmpl(s))
+#define cur_vmpl_has_guest_vmsa(s)		vmpl_has_guest_vmsa((s), cur_vmpl(s))
+
+#define tgt_vmpl(s)				((s)->sev_es.snp_target_vmpl)
+#define tgt_vmpl_vmsa(s)			vmpl_vmsa((s), tgt_vmpl(s))
+#define tgt_vmpl_vmsa_gpa(s)			vmpl_vmsa_gpa((s), tgt_vmpl(s))
+#define tgt_vmpl_vmsa_hpa(s)			vmpl_vmsa_hpa((s), tgt_vmpl(s))
+#define tgt_vmpl_ap_waiting_for_reset(s)	vmpl_ap_waiting_for_reset((s), tgt_vmpl(s))
+#define tgt_vmpl_has_guest_vmsa(s)		vmpl_has_guest_vmsa((s), tgt_vmpl(s))
+
+struct sev_vmsa_info {
+	/* SEV-ES and SEV-SNP */
 	struct sev_es_save_area *vmsa;
+
+	/* SEV-SNP for multi VMPL support */
+	gpa_t gpa;
+	hpa_t hpa;
+	bool  ap_waiting_for_reset;
+	bool  has_guest_vmsa;
+};
+
+struct vcpu_sev_es_state {
+	/* SEV-ES/SEV-SNP support */
 	struct ghcb *ghcb;
 	u8 valid_bitmap[16];
 	struct kvm_host_map ghcb_map;
@@ -219,12 +249,13 @@ struct vcpu_sev_es_state {
 	u16 psc_inflight;
 	bool psc_2m;
 
-	u64 ghcb_registered_gpa;
+	gpa_t ghcb_gpa[SVM_SEV_VMPL_MAX];
+	u64 ghcb_registered_gpa[SVM_SEV_VMPL_MAX];
+	struct sev_vmsa_info vmsa_info[SVM_SEV_VMPL_MAX];
 
 	struct mutex snp_vmsa_mutex; /* Used to handle concurrent updates of VMSA. */
-	gpa_t snp_vmsa_gpa;
-	bool snp_ap_waiting_for_reset;
-	bool snp_has_guest_vmsa;
+	unsigned int snp_current_vmpl;
+	unsigned int snp_target_vmpl;
 };
 
 struct vcpu_svm {
@@ -380,7 +411,7 @@ static __always_inline bool sev_snp_guest(struct kvm *kvm)
 
 static inline bool ghcb_gpa_is_registered(struct vcpu_svm *svm, u64 val)
 {
-	return svm->sev_es.ghcb_registered_gpa == val;
+	return svm->sev_es.ghcb_registered_gpa[cur_vmpl(svm)] == val;
 }
 
 static inline void vmcb_mark_all_dirty(struct vmcb *vmcb)

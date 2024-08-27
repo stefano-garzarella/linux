@@ -1463,8 +1463,10 @@ static int svm_vcpu_create(struct kvm_vcpu *vcpu)
 	svm->vmcb01.pa = __sme_set(page_to_pfn(vmcb01_page) << PAGE_SHIFT);
 	svm_switch_vmcb(svm, &svm->vmcb01);
 
-	if (vmsa_page)
-		svm->sev_es.vmsa = page_address(vmsa_page);
+	if (vmsa_page) {
+		vmpl_vmsa(svm, SVM_SEV_VMPL0) = page_address(vmsa_page);
+		vmpl_vmsa_hpa(svm, SVM_SEV_VMPL0) = __pa(page_address(vmsa_page));
+	}
 
 	svm->guest_state_loaded = false;
 
