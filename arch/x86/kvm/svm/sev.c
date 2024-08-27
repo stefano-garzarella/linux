@@ -144,7 +144,7 @@ static bool sev_vcpu_has_debug_swap(struct vcpu_svm *svm)
 	struct kvm_vcpu *vcpu = &svm->vcpu;
 	struct kvm_sev_info *sev = &to_kvm_svm(vcpu->kvm)->sev_info;
 
-	return sev->vmsa_features & SVM_SEV_FEAT_DEBUG_SWAP;
+	return sev->vmsa_features[cur_vmpl(svm)] & SVM_SEV_FEAT_DEBUG_SWAP;
 }
 
 /* Must be called with the sev_bitmap_lock held */
@@ -428,7 +428,7 @@ static int __sev_guest_init(struct kvm *kvm, struct kvm_sev_cmd *argp,
 
 	sev->active = true;
 	sev->es_active = es_active;
-	sev->vmsa_features = data->vmsa_features;
+	sev->vmsa_features[SVM_SEV_VMPL0] = data->vmsa_features;
 	sev->ghcb_version = data->ghcb_version;
 
 	/*
@@ -440,7 +440,7 @@ static int __sev_guest_init(struct kvm *kvm, struct kvm_sev_cmd *argp,
 		sev->ghcb_version = GHCB_VERSION_DEFAULT;
 
 	if (vm_type == KVM_X86_SNP_VM)
-		sev->vmsa_features |= SVM_SEV_FEAT_SNP_ACTIVE;
+		sev->vmsa_features[SVM_SEV_VMPL0] |= SVM_SEV_FEAT_SNP_ACTIVE;
 
 	ret = sev_asid_new(sev);
 	if (ret)
@@ -468,7 +468,7 @@ e_free:
 	sev_asid_free(sev);
 	sev->asid = 0;
 e_no_asid:
-	sev->vmsa_features = 0;
+	sev->vmsa_features[SVM_SEV_VMPL0] = 0;
 	sev->es_active = false;
 	sev->active = false;
 	return ret;
@@ -852,7 +852,7 @@ static int sev_es_sync_vmsa(struct vcpu_svm *svm)
 	save->xss  = svm->vcpu.arch.ia32_xss;
 	save->dr6  = svm->vcpu.arch.dr6;
 
-	save->sev_features = sev->vmsa_features;
+	save->sev_features = sev->vmsa_features[SVM_SEV_VMPL0];
 
 	/*
 	 * Skip FPU and AVX setup with KVM_SEV_ES_INIT to avoid
@@ -1985,7 +1985,7 @@ static void sev_migrate_from(struct kvm *dst_kvm, struct kvm *src_kvm)
 	dst->pages_locked = src->pages_locked;
 	dst->enc_context_owner = src->enc_context_owner;
 	dst->es_active = src->es_active;
-	dst->vmsa_features = src->vmsa_features;
+	memcpy(dst->vmsa_features, src->vmsa_features, sizeof(dst->vmsa_features));
 
 	src->asid = 0;
 	src->active = false;
@@ -4035,8 +4035,16 @@ static int sev_snp_ap_creation(struct vcpu_svm *svm)
 
 		/* Interrupt injection mode shouldn't change for AP creation */
 		sev_features = vcpu->arch.regs[VCPU_REGS_RAX];
-		sev_features ^= sev->vmsa_features;
 
+		/*
+		 * The SNPActive feature must at least be set. If the SEV
+		 * features of this AP are zero, this is the first vCPU created at
+		 * this VMPL.
+		 */
+		if (!sev->vmsa_features[vmpl])
+			sev->vmsa_features[vmpl] = sev_features | SVM_SEV_FEAT_SNP_ACTIVE;
+
+		sev_features ^= sev->vmsa_features[vmpl];
 		if (sev_features & SVM_SEV_FEAT_INT_INJ_MODES) {
 			vcpu_unimpl(vcpu, "vmgexit: invalid AP injection mode [%#lx] from guest\n",
 				    vcpu->arch.regs[VCPU_REGS_RAX]);
