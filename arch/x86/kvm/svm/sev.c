@@ -5228,3 +5228,33 @@ int sev_private_max_mapping_level(struct kvm *kvm, kvm_pfn_t pfn)
 
 	return level;
 }
+
+bool sev_snp_is_rinj_active(struct kvm_vcpu *vcpu)
+{
+	struct kvm_sev_info *sev;
+	int vmpl;
+
+	if (!sev_snp_guest(vcpu->kvm))
+		return false;
+
+	sev = &to_kvm_svm(vcpu->kvm)->sev_info;
+	vmpl = to_svm(vcpu)->sev_es.snp_current_vmpl;
+
+	return sev->vmsa_features[vmpl] & SVM_SEV_FEAT_RESTRICTED_INJECTION;
+}
+
+bool sev_snp_nmi_blocked(struct kvm_vcpu *vcpu)
+{
+	WARN_ON_ONCE(!sev_snp_is_rinj_active(vcpu));
+
+	/* NMIs are blocked when restricted injection is active */
+	return true;
+}
+
+bool sev_snp_interrupt_blocked(struct kvm_vcpu *vcpu)
+{
+	WARN_ON_ONCE(!sev_snp_is_rinj_active(vcpu));
+
+	/* Interrupts are blocked when restricted injection is active */
+	return true;
+}
