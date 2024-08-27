@@ -198,6 +198,18 @@ struct svm_nested_state {
 	bool force_msr_bitmap_recalc;
 };
 
+struct vmpl_switch_sa {
+	u32 int_state;
+	u32 exit_int_info;
+	u32 exit_int_info_err;
+
+	unsigned long cr0;
+	unsigned long cr2;
+	unsigned long cr4;
+	unsigned long cr8;
+	u64 efer;
+};
+
 #define vmpl_vmsa(s, v)				((s)->sev_es.vmsa_info[(v)].vmsa)
 #define vmpl_vmsa_gpa(s, v)			((s)->sev_es.vmsa_info[(v)].gpa)
 #define vmpl_vmsa_hpa(s, v)			((s)->sev_es.vmsa_info[(v)].hpa)
@@ -256,6 +268,8 @@ struct vcpu_sev_es_state {
 	struct mutex snp_vmsa_mutex; /* Used to handle concurrent updates of VMSA. */
 	unsigned int snp_current_vmpl;
 	unsigned int snp_target_vmpl;
+
+	struct vmpl_switch_sa vssa[SVM_SEV_VMPL_MAX];
 };
 
 struct vcpu_svm {
@@ -776,7 +790,7 @@ int sev_cpu_init(struct svm_cpu_data *sd);
 int sev_dev_get_attr(u32 group, u64 attr, u64 *val);
 extern unsigned int max_sev_asid;
 void sev_handle_rmp_fault(struct kvm_vcpu *vcpu, gpa_t gpa, u64 error_code);
-void sev_snp_init_protected_guest_state(struct kvm_vcpu *vcpu);
+bool sev_snp_init_protected_guest_state(struct kvm_vcpu *vcpu);
 int sev_gmem_prepare(struct kvm *kvm, kvm_pfn_t pfn, gfn_t gfn, int max_order);
 void sev_gmem_invalidate(kvm_pfn_t start, kvm_pfn_t end);
 int sev_private_max_mapping_level(struct kvm *kvm, kvm_pfn_t pfn);
@@ -800,7 +814,7 @@ static inline int sev_cpu_init(struct svm_cpu_data *sd) { return 0; }
 static inline int sev_dev_get_attr(u32 group, u64 attr, u64 *val) { return -ENXIO; }
 #define max_sev_asid 0
 static inline void sev_handle_rmp_fault(struct kvm_vcpu *vcpu, gpa_t gpa, u64 error_code) {}
-static inline void sev_snp_init_protected_guest_state(struct kvm_vcpu *vcpu) {}
+static inline bool sev_snp_init_protected_guest_state(struct kvm_vcpu *vcpu) { return false; }
 static inline int sev_gmem_prepare(struct kvm *kvm, kvm_pfn_t pfn, gfn_t gfn, int max_order)
 {
 	return 0;

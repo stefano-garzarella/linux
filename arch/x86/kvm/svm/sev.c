@@ -3422,6 +3422,10 @@ static int sev_es_validate_vmgexit(struct vcpu_svm *svm)
 		    control->exit_info_1 == control->exit_info_2)
 			goto vmgexit_err;
 		break;
+	case SVM_VMGEXIT_SNP_RUN_VMPL:
+		if (!sev_snp_guest(vcpu->kvm))
+			goto vmgexit_err;
+		break;
 	default:
 		reason = GHCB_ERR_INVALID_EVENT;
 		goto vmgexit_err;
@@ -3936,20 +3940,24 @@ static int __sev_snp_update_protected_guest_state(struct kvm_vcpu *vcpu)
 }
 
 /*
- * Invoked as part of svm_vcpu_reset() processing of an init event.
+ * Invoked as part of svm_vcpu_reset() processing of an init event
+ * or as part of switching to a new VMPL.
  */
-void sev_snp_init_protected_guest_state(struct kvm_vcpu *vcpu)
+bool sev_snp_init_protected_guest_state(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_svm *svm = to_svm(vcpu);
+	bool init = false;
 	int ret;
 
 	if (!sev_snp_guest(vcpu->kvm))
-		return;
+		return false;
 
 	mutex_lock(&svm->sev_es.snp_vmsa_mutex);
 
 	if (!tgt_vmpl_ap_waiting_for_reset(svm))
 		goto unlock;
+
+	init = true;
 
 	tgt_vmpl_ap_waiting_for_reset(svm) = false;
 
@@ -3959,6 +3967,8 @@ void sev_snp_init_protected_guest_state(struct kvm_vcpu *vcpu)
 
 unlock:
 	mutex_unlock(&svm->sev_es.snp_vmsa_mutex);
+
+	return init;
 }
 
 static int sev_snp_ap_creation(struct vcpu_svm *svm)
@@ -4256,6 +4266,92 @@ static void sev_get_apic_ids(struct vcpu_svm *svm)
 	kvfree(desc);
 }
 
+static int __sev_run_vmpl_vmsa(struct vcpu_svm *svm, unsigned int new_vmpl)
+{
+	struct kvm_vcpu *vcpu = &svm->vcpu;
+	struct vmpl_switch_sa *old_vmpl_sa;
+	struct vmpl_switch_sa *new_vmpl_sa;
+	unsigned int old_vmpl;
+
+	if (new_vmpl >= SVM_SEV_VMPL_MAX)
+		return -EINVAL;
+	new_vmpl = array_index_nospec(new_vmpl, SVM_SEV_VMPL_MAX);
+
+	old_vmpl = svm->sev_es.snp_current_vmpl;
+	svm->sev_es.snp_target_vmpl = new_vmpl;
+
+	if (svm->sev_es.snp_target_vmpl == svm->sev_es.snp_current_vmpl ||
+	    sev_snp_init_protected_guest_state(vcpu))
+		return 0;
+
+	/* If the VMSA is not valid, return an error */
+	if (!VALID_PAGE(vmpl_vmsa_hpa(svm, new_vmpl)))
+		return -EINVAL;
+
+	/* Unmap the current GHCB */
+	sev_es_unmap_ghcb(svm);
+
+	/* Save some current VMCB values */
+	svm->sev_es.ghcb_gpa[old_vmpl]		= svm->vmcb->control.ghcb_gpa;
+
+	old_vmpl_sa = &svm->sev_es.vssa[old_vmpl];
+	old_vmpl_sa->int_state			= svm->vmcb->control.int_state;
+	old_vmpl_sa->exit_int_info		= svm->vmcb->control.exit_int_info;
+	old_vmpl_sa->exit_int_info_err		= svm->vmcb->control.exit_int_info_err;
+	old_vmpl_sa->cr0			= vcpu->arch.cr0;
+	old_vmpl_sa->cr2			= vcpu->arch.cr2;
+	old_vmpl_sa->cr4			= vcpu->arch.cr4;
+	old_vmpl_sa->cr8			= vcpu->arch.cr8;
+	old_vmpl_sa->efer			= vcpu->arch.efer;
+
+	/* Restore some previous VMCB values */
+	svm->vmcb->control.vmsa_pa		= vmpl_vmsa_hpa(svm, new_vmpl);
+	svm->vmcb->control.ghcb_gpa		= svm->sev_es.ghcb_gpa[new_vmpl];
+
+	new_vmpl_sa = &svm->sev_es.vssa[new_vmpl];
+	svm->vmcb->control.int_state		= new_vmpl_sa->int_state;
+	svm->vmcb->control.exit_int_info	= new_vmpl_sa->exit_int_info;
+	svm->vmcb->control.exit_int_info_err	= new_vmpl_sa->exit_int_info_err;
+	vcpu->arch.cr0				= new_vmpl_sa->cr0;
+	vcpu->arch.cr2				= new_vmpl_sa->cr2;
+	vcpu->arch.cr4				= new_vmpl_sa->cr4;
+	vcpu->arch.cr8				= new_vmpl_sa->cr8;
+	vcpu->arch.efer				= new_vmpl_sa->efer;
+
+	svm->sev_es.snp_current_vmpl = new_vmpl;
+
+	vmcb_mark_all_dirty(svm->vmcb);
+
+	return 0;
+}
+
+static void sev_run_vmpl_vmsa(struct vcpu_svm *svm)
+{
+	struct ghcb *ghcb = svm->sev_es.ghcb;
+	struct kvm_vcpu *vcpu = &svm->vcpu;
+	unsigned int vmpl;
+	int ret;
+
+	/* TODO: Does this need to be synced for original VMPL ... */
+	ghcb_set_sw_exit_info_1(ghcb, 0);
+	ghcb_set_sw_exit_info_2(ghcb, 0);
+
+	if (!sev_snp_guest(vcpu->kvm))
+		goto err;
+
+	vmpl = lower_32_bits(svm->vmcb->control.exit_info_1);
+
+	ret = __sev_run_vmpl_vmsa(svm, vmpl);
+	if (ret)
+		goto err;
+
+	return;
+
+err:
+	ghcb_set_sw_exit_info_1(ghcb, 2);
+	ghcb_set_sw_exit_info_2(ghcb, 0);
+}
+
 static int sev_handle_vmgexit_msr_protocol(struct vcpu_svm *svm)
 {
 	struct vmcb_control_area *control = &svm->vmcb->control;
@@ -4367,6 +4463,25 @@ static int sev_handle_vmgexit_msr_protocol(struct vcpu_svm *svm)
 
 		ret = snp_begin_psc_msr(svm, control->ghcb_gpa);
 		break;
+	case GHCB_MSR_VMPL_REQ: {
+		unsigned int vmpl;
+
+		vmpl = get_ghcb_msr_bits(svm, GHCB_MSR_VMPL_LEVEL_MASK, GHCB_MSR_VMPL_LEVEL_POS);
+
+		/*
+		 * Set as successful in advance, since this value will be saved
+		 * as part of the VMPL switch and then restored if switching
+		 * back to the calling VMPL level.
+		 */
+		set_ghcb_msr_bits(svm, 0, GHCB_MSR_VMPL_ERROR_MASK, GHCB_MSR_VMPL_ERROR_POS);
+		set_ghcb_msr_bits(svm, 0, GHCB_MSR_VMPL_RSVD_MASK, GHCB_MSR_VMPL_RSVD_POS);
+		set_ghcb_msr_bits(svm, GHCB_MSR_VMPL_RESP, GHCB_MSR_INFO_MASK, GHCB_MSR_INFO_POS);
+
+		if (__sev_run_vmpl_vmsa(svm, vmpl))
+			set_ghcb_msr_bits(svm, 1, GHCB_MSR_VMPL_ERROR_MASK, GHCB_MSR_VMPL_ERROR_POS);
+
+		break;
+	}
 	case GHCB_MSR_TERM_REQ: {
 		u64 reason_set, reason_code;
 
@@ -4538,6 +4653,11 @@ int sev_handle_vmgexit(struct kvm_vcpu *vcpu)
 		break;
 	case SVM_VMGEXIT_GET_APIC_IDS:
 		sev_get_apic_ids(svm);
+
+		ret = 1;
+		break;
+	case SVM_VMGEXIT_SNP_RUN_VMPL:
+		sev_run_vmpl_vmsa(svm);
 
 		ret = 1;
 		break;
