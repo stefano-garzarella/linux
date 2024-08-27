@@ -41,7 +41,10 @@
 
 #define GHCB_HV_FT_SUPPORTED	(GHCB_HV_FT_SNP			| \
 				 GHCB_HV_FT_SNP_AP_CREATION	| \
-				 GHCB_HV_FT_APIC_ID_LIST)
+				 GHCB_HV_FT_APIC_ID_LIST	| \
+				 GHCB_HV_FT_SNP_MULTI_VMPL)
+
+#define SNP_SUPPORTED_INIT_FLAGS	KVM_SEV_SNP_SVSM
 
 /* enable/disable SEV support */
 static bool sev_enabled = true;
@@ -329,6 +332,12 @@ static void sev_unbind_asid(struct kvm *kvm, unsigned int handle)
 	sev_decommission(handle);
 }
 
+static bool verify_init_flags(struct kvm_sev_init *data, unsigned long vm_type)
+{
+	return (vm_type != KVM_X86_SNP_VM) ? !data->flags
+					   : !(data->flags & ~SNP_SUPPORTED_INIT_FLAGS);
+}
+
 /*
  * This sets up bounce buffers/firmware pages to handle SNP Guest Request
  * messages (e.g. attestation requests). See "SNP Guest Request" in the GHCB
@@ -414,7 +423,7 @@ static int __sev_guest_init(struct kvm *kvm, struct kvm_sev_cmd *argp,
 	if (kvm->created_vcpus)
 		return -EINVAL;
 
-	if (data->flags)
+	if (!verify_init_flags(data, vm_type))
 		return -EINVAL;
 
 	if (data->vmsa_features & ~valid_vmsa_features)
@@ -430,6 +439,7 @@ static int __sev_guest_init(struct kvm *kvm, struct kvm_sev_cmd *argp,
 	sev->es_active = es_active;
 	sev->vmsa_features[SVM_SEV_VMPL0] = data->vmsa_features;
 	sev->ghcb_version = data->ghcb_version;
+	sev->snp_init_flags = data->flags;
 
 	/*
 	 * Currently KVM supports the full range of mandatory features defined
@@ -468,6 +478,7 @@ e_free:
 	sev_asid_free(sev);
 	sev->asid = 0;
 e_no_asid:
+	sev->snp_init_flags = 0;
 	sev->vmsa_features[SVM_SEV_VMPL0] = 0;
 	sev->es_active = false;
 	sev->active = false;
@@ -2152,7 +2163,9 @@ int sev_dev_get_attr(u32 group, u64 attr, u64 *val)
 	case KVM_X86_SEV_VMSA_FEATURES:
 		*val = sev_supported_vmsa_features;
 		return 0;
-
+	case KVM_X86_SEV_SNP_INIT_FLAGS:
+		*val = SNP_SUPPORTED_INIT_FLAGS;
+		return 0;
 	default:
 		return -ENXIO;
 	}
@@ -2260,6 +2273,9 @@ e_free_context:
 
 struct sev_gmem_populate_args {
 	__u8 type;
+	__u8 vmpl1_perms;
+	__u8 vmpl2_perms;
+	__u8 vmpl3_perms;
 	int sev_fd;
 	int fw_error;
 };
@@ -2310,6 +2326,9 @@ static int sev_gmem_post_populate(struct kvm *kvm, gfn_t gfn_start, kvm_pfn_t pf
 		fw_args.address = __sme_set(pfn_to_hpa(pfn + i));
 		fw_args.page_size = PG_LEVEL_TO_RMP(PG_LEVEL_4K);
 		fw_args.page_type = sev_populate_args->type;
+		fw_args.vmpl1_perms = sev_populate_args->vmpl1_perms;
+		fw_args.vmpl2_perms = sev_populate_args->vmpl2_perms;
+		fw_args.vmpl3_perms = sev_populate_args->vmpl3_perms;
 
 		ret = __sev_issue_cmd(sev_populate_args->sev_fd, SEV_CMD_SNP_LAUNCH_UPDATE,
 				      &fw_args, &sev_populate_args->fw_error);
@@ -2356,34 +2375,27 @@ err:
 	return ret;
 }
 
-static int snp_launch_update(struct kvm *kvm, struct kvm_sev_cmd *argp)
+static int __snp_launch_update(struct kvm *kvm, struct kvm_sev_cmd *argp,
+			       struct kvm_sev_snp_launch_update_vmpls *params)
 {
-	struct kvm_sev_info *sev = &to_kvm_svm(kvm)->sev_info;
 	struct sev_gmem_populate_args sev_populate_args = {0};
-	struct kvm_sev_snp_launch_update params;
 	struct kvm_memory_slot *memslot;
 	long npages, count;
 	void __user *src;
 	int ret = 0;
 
-	if (!sev_snp_guest(kvm) || !sev->snp_context)
-		return -EINVAL;
-
-	if (copy_from_user(&params, u64_to_user_ptr(argp->data), sizeof(params)))
-		return -EFAULT;
-
 	pr_debug("%s: GFN start 0x%llx length 0x%llx type %d flags %d\n", __func__,
-		 params.gfn_start, params.len, params.type, params.flags);
+		 params->lu.gfn_start, params->lu.len, params->lu.type, params->lu.flags);
 
-	if (!PAGE_ALIGNED(params.len) || params.flags ||
-	    (params.type != KVM_SEV_SNP_PAGE_TYPE_NORMAL &&
-	     params.type != KVM_SEV_SNP_PAGE_TYPE_ZERO &&
-	     params.type != KVM_SEV_SNP_PAGE_TYPE_UNMEASURED &&
-	     params.type != KVM_SEV_SNP_PAGE_TYPE_SECRETS &&
-	     params.type != KVM_SEV_SNP_PAGE_TYPE_CPUID))
+	if (!PAGE_ALIGNED(params->lu.len) || params->lu.flags ||
+	    (params->lu.type != KVM_SEV_SNP_PAGE_TYPE_NORMAL &&
+	     params->lu.type != KVM_SEV_SNP_PAGE_TYPE_ZERO &&
+	     params->lu.type != KVM_SEV_SNP_PAGE_TYPE_UNMEASURED &&
+	     params->lu.type != KVM_SEV_SNP_PAGE_TYPE_SECRETS &&
+	     params->lu.type != KVM_SEV_SNP_PAGE_TYPE_CPUID))
 		return -EINVAL;
 
-	npages = params.len / PAGE_SIZE;
+	npages = params->lu.len / PAGE_SIZE;
 
 	/*
 	 * For each GFN that's being prepared as part of the initial guest
@@ -2406,17 +2418,20 @@ static int snp_launch_update(struct kvm *kvm, struct kvm_sev_cmd *argp)
 	 */
 	mutex_lock(&kvm->slots_lock);
 
-	memslot = gfn_to_memslot(kvm, params.gfn_start);
+	memslot = gfn_to_memslot(kvm, params->lu.gfn_start);
 	if (!kvm_slot_can_be_private(memslot)) {
 		ret = -EINVAL;
 		goto out;
 	}
 
 	sev_populate_args.sev_fd = argp->sev_fd;
-	sev_populate_args.type = params.type;
-	src = params.type == KVM_SEV_SNP_PAGE_TYPE_ZERO ? NULL : u64_to_user_ptr(params.uaddr);
+	sev_populate_args.type = params->lu.type;
+	sev_populate_args.vmpl1_perms = params->vmpl1_perms;
+	sev_populate_args.vmpl2_perms = params->vmpl2_perms;
+	sev_populate_args.vmpl3_perms = params->vmpl3_perms;
+	src = params->lu.type == KVM_SEV_SNP_PAGE_TYPE_ZERO ? NULL : u64_to_user_ptr(params->lu.uaddr);
 
-	count = kvm_gmem_populate(kvm, params.gfn_start, src, npages,
+	count = kvm_gmem_populate(kvm, params->lu.gfn_start, src, npages,
 				  sev_gmem_post_populate, &sev_populate_args);
 	if (count < 0) {
 		argp->error = sev_populate_args.fw_error;
@@ -2424,13 +2439,16 @@ static int snp_launch_update(struct kvm *kvm, struct kvm_sev_cmd *argp)
 			 __func__, count, argp->error);
 		ret = -EIO;
 	} else {
-		params.gfn_start += count;
-		params.len -= count * PAGE_SIZE;
-		if (params.type != KVM_SEV_SNP_PAGE_TYPE_ZERO)
-			params.uaddr += count * PAGE_SIZE;
+		params->lu.gfn_start += count;
+		params->lu.len -= count * PAGE_SIZE;
+		if (params->lu.type != KVM_SEV_SNP_PAGE_TYPE_ZERO)
+			params->lu.uaddr += count * PAGE_SIZE;
 
 		ret = 0;
-		if (copy_to_user(u64_to_user_ptr(argp->data), &params, sizeof(params)))
+
+		/* Only copy the original LAUNCH_UPDATE area back */
+		if (copy_to_user(u64_to_user_ptr(argp->data), params,
+				 sizeof(struct kvm_sev_snp_launch_update)))
 			ret = -EFAULT;
 	}
 
@@ -2438,6 +2456,40 @@ out:
 	mutex_unlock(&kvm->slots_lock);
 
 	return ret;
+}
+
+static int snp_launch_update_vmpls(struct kvm *kvm, struct kvm_sev_cmd *argp)
+{
+	struct kvm_sev_info *sev = &to_kvm_svm(kvm)->sev_info;
+	struct kvm_sev_snp_launch_update_vmpls params;
+
+	if (!sev_snp_guest(kvm) || !sev->snp_context)
+		return -EINVAL;
+
+	if (copy_from_user(&params, (void __user *)(uintptr_t)argp->data, sizeof(params)))
+		return -EFAULT;
+
+	return __snp_launch_update(kvm, argp, &params);
+}
+
+static int snp_launch_update(struct kvm *kvm, struct kvm_sev_cmd *argp)
+{
+	struct kvm_sev_info *sev = &to_kvm_svm(kvm)->sev_info;
+	struct kvm_sev_snp_launch_update_vmpls params;
+
+	if (!sev_snp_guest(kvm) || !sev->snp_context)
+		return -EINVAL;
+
+	/* Copy only the kvm_sev_snp_launch_update portion */
+	if (copy_from_user(&params, (void __user *)(uintptr_t)argp->data,
+			   sizeof(struct kvm_sev_snp_launch_update)))
+		return -EFAULT;
+
+	params.vmpl1_perms = 0;
+	params.vmpl2_perms = 0;
+	params.vmpl3_perms = 0;
+
+	return __snp_launch_update(kvm, argp, &params);
 }
 
 static int snp_launch_update_vmsa(struct kvm *kvm, struct kvm_sev_cmd *argp)
@@ -2454,6 +2506,10 @@ static int snp_launch_update_vmsa(struct kvm *kvm, struct kvm_sev_cmd *argp)
 	kvm_for_each_vcpu(i, vcpu, kvm) {
 		struct vcpu_svm *svm = to_svm(vcpu);
 		u64 pfn = __pa(vmpl_vmsa(svm, SVM_SEV_VMPL0)) >> PAGE_SHIFT;
+
+		/* If SVSM support is requested, only measure the boot vCPU */
+		if ((sev->snp_init_flags & KVM_SEV_SNP_SVSM) && vcpu->vcpu_id != 0)
+			continue;
 
 		ret = sev_es_sync_vmsa(svm);
 		if (ret)
@@ -2483,6 +2539,10 @@ static int snp_launch_update_vmsa(struct kvm *kvm, struct kvm_sev_cmd *argp)
 		 * MSR_IA32_DEBUGCTLMSR when guest_state_protected is not set.
 		 */
 		svm_enable_lbrv(vcpu);
+
+		/* If SVSM support is requested, no more vCPUs are measured. */
+		if (sev->snp_init_flags & KVM_SEV_SNP_SVSM)
+			break;
 	}
 
 	return 0;
@@ -2508,7 +2568,7 @@ static int snp_launch_finish(struct kvm *kvm, struct kvm_sev_cmd *argp)
 	if (params.flags)
 		return -EINVAL;
 
-	/* Measure all vCPUs using LAUNCH_UPDATE before finalizing the launch flow. */
+	/* Measure vCPUs using LAUNCH_UPDATE before we finalize the launch flow. */
 	ret = snp_launch_update_vmsa(kvm, argp);
 	if (ret)
 		return ret;
@@ -2665,6 +2725,9 @@ int sev_mem_enc_ioctl(struct kvm *kvm, void __user *argp)
 		break;
 	case KVM_SEV_SNP_LAUNCH_UPDATE:
 		r = snp_launch_update(kvm, &sev_cmd);
+		break;
+	case KVM_SEV_SNP_LAUNCH_UPDATE_VMPLS:
+		r = snp_launch_update_vmpls(kvm, &sev_cmd);
 		break;
 	case KVM_SEV_SNP_LAUNCH_FINISH:
 		r = snp_launch_finish(kvm, &sev_cmd);
