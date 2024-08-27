@@ -3079,6 +3079,7 @@ out:
 		sev_es_debug_swap_enabled = false;
 
 	sev_supported_vmsa_features = 0;
+	sev_supported_vmsa_features |= SVM_SEV_FEAT_RESTRICTED_INJECTION;
 	if (sev_es_debug_swap_enabled)
 		sev_supported_vmsa_features |= SVM_SEV_FEAT_DEBUG_SWAP;
 }
