@@ -2520,11 +2520,11 @@ static int snp_issue_svsm_vtpm_send_command(u8 *buffer)
 {
 	struct svsm_call call = {};
 
-	call.caa = __svsm_get_caa();
+	call.caa = svsm_get_caa();
 	call.rax = (2ULL << 32) | 1;
 	call.rcx = __pa(buffer);
 
-	return svsm_protocol(&call);
+	return svsm_perform_call_protocol(&call);
 }
 
 static bool is_svsm_vtpm_send_command_supported(void)
@@ -2535,10 +2535,10 @@ static bool is_svsm_vtpm_send_command_supported(void)
 	u64 features;
 	int ret;
 
-	call.caa = __svsm_get_caa();
+	call.caa = svsm_get_caa();
 	call.rax = 2ULL << 32;
 
-	ret = svsm_protocol(&call);
+	ret = svsm_perform_call_protocol(&call);
 
 	if (ret != SVSM_SUCCESS)
 		return false;
@@ -2581,7 +2581,7 @@ static int __init snp_init_platform_device(void)
 	 * its VTPM supports the TPM_SEND_COMMAND platform command
 	 */
 
-	if (IS_ENABLED(CONFIG_TCG_PLATFORM) && vmpl &&
+	if (IS_ENABLED(CONFIG_TCG_PLATFORM) && snp_vmpl &&
 	    is_svsm_vtpm_send_command_supported()) {
 		struct tpm_platform_ops pops = {
 			.sendrcv = snp_issue_svsm_vtpm_send_command,
