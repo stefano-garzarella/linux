@@ -2695,8 +2695,49 @@ static ssize_t vmpl_show(struct kobject *kobj,
 
 static struct kobj_attribute vmpl_attr = __ATTR_RO(vmpl);
 
+#define SVSM_CUSTOM_CALL(x)		((42ULL << 32) | (x))
+
+struct custom_call_req {
+	u64 count;
+	char buf[];
+};
+
+static ssize_t custom_call_store(struct kobject *kobj,
+                                 struct kobj_attribute *attr,
+                                 const char *buf, size_t count)
+{
+	struct custom_call_req *req;
+	struct svsm_call call = {};
+	int ret;
+
+	if (count + sizeof(*req) > PAGE_SIZE)
+		return -EFAULT;
+
+	req = kmalloc(PAGE_SIZE, GFP_KERNEL);
+	if (!req)
+		return -ENOMEM;
+
+	req->count = count;
+	memcpy(req->buf, buf, count);
+
+	call.caa = svsm_get_caa();
+	call.rax = SVSM_CUSTOM_CALL(0);
+	call.rcx = __pa(req);
+
+	ret = svsm_perform_call_protocol(&call);
+	if (ret < 0)
+		count = ret;
+
+	kfree(req);
+	return count;
+}
+
+static struct kobj_attribute custom_call_attr = __ATTR(custom_call, 0220,
+						       NULL, custom_call_store);
+
 static struct attribute *vmpl_attrs[] = {
 	&vmpl_attr.attr,
+	&custom_call_attr.attr,
 	NULL
 };
 
