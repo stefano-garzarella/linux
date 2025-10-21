@@ -565,6 +565,11 @@ static u32 vsock_registered_transport_cid(const struct vsock_transport **transpo
 	return cid;
 }
 
+/* vsock_find_cid() must be called outside lock_sock/release_sock
+ * section to avoid a potential lock inversion deadlock with
+ * vsock_assign_transport() where `vsock_register_mutex` is taken when
+ * `sk_lock-AF_VSOCK` is already held.
+ */
 bool vsock_find_cid(unsigned int cid)
 {
 	if (cid == vsock_registered_transport_cid(&transport_g2h))
@@ -735,22 +740,13 @@ static int __vsock_bind_dgram(struct vsock_sock *vsk,
 	return vsk->transport->dgram_bind(vsk, addr);
 }
 
+/* The caller must ensure the socket is not already bound and provide a valid
+ * `addr` to bind (VMADDR_CID_ANY, or a CID assgined to a transport).
+ */
 static int __vsock_bind(struct sock *sk, struct sockaddr_vm *addr)
 {
 	struct vsock_sock *vsk = vsock_sk(sk);
 	int retval;
-
-	/* First ensure this socket isn't already bound. */
-	if (vsock_addr_bound(&vsk->local_addr))
-		return -EINVAL;
-
-	/* Now bind to the provided address or select appropriate values if
-	 * none are provided (VMADDR_CID_ANY and VMADDR_PORT_ANY).  Note that
-	 * like AF_INET prevents binding to a non-local IP address (in most
-	 * cases), we only allow binding to a local CID.
-	 */
-	if (addr->svm_cid != VMADDR_CID_ANY && !vsock_find_cid(addr->svm_cid))
-		return -EADDRNOTAVAIL;
 
 	switch (sk->sk_socket->type) {
 	case SOCK_STREAM:
@@ -991,15 +987,33 @@ vsock_bind(struct socket *sock, struct sockaddr *addr, int addr_len)
 {
 	int err;
 	struct sock *sk;
+	struct vsock_sock *vsk;
 	struct sockaddr_vm *vm_addr;
 
 	sk = sock->sk;
+	vsk = vsock_sk(sk);
 
 	if (vsock_addr_cast(addr, addr_len, &vm_addr) != 0)
 		return -EINVAL;
 
+	/* Like AF_INET prevents binding to a non-local IP address (in most
+	 * cases), we only allow binding to a local CID.
+	 */
+	if (vm_addr->svm_cid != VMADDR_CID_ANY &&
+	    !vsock_find_cid(vm_addr->svm_cid))
+		return -EADDRNOTAVAIL;
+
 	lock_sock(sk);
+
+	/* Ensure this socket isn't already bound. */
+	if (vsock_addr_bound(&vsk->local_addr)) {
+		err = -EINVAL;
+		goto out;
+	}
+
 	err = __vsock_bind(sk, vm_addr);
+
+out:
 	release_sock(sk);
 
 	return err;
