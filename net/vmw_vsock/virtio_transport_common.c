@@ -1270,9 +1270,16 @@ static void virtio_transport_close_timeout(struct work_struct *work)
 		(void)virtio_transport_reset(vsk, NULL);
 
 		virtio_transport_do_close(vsk, false);
+	} else {
+		/* virtio_transport_do_close() was already called by
+		 * the receive path, but
+		 * virtio_transport_cancel_close_work() may not have
+		 * been able to cancel this close_work handler because
+		 * it had already started executing. Ensure close work
+		 * cleanup is still performed.
+		 */
+		virtio_transport_cancel_close_work(vsk, false);
 	}
-
-	vsk->close_work_scheduled = false;
 
 	release_sock(sk);
 	sock_put(sk);
